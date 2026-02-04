@@ -1,12 +1,15 @@
 <script lang="ts">
 	import CanvasPanel from '$lib/components/canvas/CanvasPanel.svelte';
 	import CanvasToolbar from '$lib/components/canvas/CanvasToolbar.svelte';
+	import DemoCursor from '$lib/components/DemoCursor.svelte';
 	import LayersPanel from '$lib/components/LayersPanel.svelte';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import StepPanel from '$lib/components/StepPanel.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import WorkspacePanel from '$lib/components/workspace/WorkspacePanel.svelte';
 </script>
+
+<DemoCursor />
 
 <div class="flex h-full w-full flex-col p-3 lg:h-screen lg:w-screen">
 	<Titlebar />
