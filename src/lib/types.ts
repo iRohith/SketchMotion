@@ -1,6 +1,6 @@
 export enum Layer {
-	BACKGROUND = 0,
-	START = 1,
+	START = 0,
+	MOTION = 1,
 	END = 2,
 	FINAL = 3
 }
@@ -39,6 +39,7 @@ export interface Stroke {
 	points: StrokePoint[];
 	color: string;
 	size: number;
+	layer: Layer;
 	transform?: Transform;
 	bounding?: BoundingBox;
 	corners?: boolean[];

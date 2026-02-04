@@ -1,12 +1,86 @@
-import type { Point, Stroke } from '$lib/types';
+import type { Point, Stroke, StrokePoint } from '$lib/types';
 import { demoCursor } from '$lib/stores/demoCursor.svelte';
-import { requestRender, addStroke, updateStroke } from '$lib/stores/canvas.svelte';
+import {
+	requestRender,
+	addStroke,
+	updateStroke,
+	calculateBoundingBox
+} from '$lib/stores/canvas.svelte';
 import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+const strokeTuning = {
+	smoothingStrength: 0.8,
+	cornerAngleThreshold: 1.15,
+	slowSpeed: 0.01,
+	fastSpeed: 0.1
+};
+
+function isCornerPoint(points: StrokePoint[], index: number, angleThreshold: number): boolean {
+	if (index <= 0 || index >= points.length - 1) return true;
+	const prev = points[index - 1];
+	const curr = points[index];
+	const next = points[index + 1];
+	const v1x = curr.x - prev.x;
+	const v1y = curr.y - prev.y;
+	const v2x = next.x - curr.x;
+	const v2y = next.y - curr.y;
+	const mag1 = Math.hypot(v1x, v1y);
+	const mag2 = Math.hypot(v2x, v2y);
+	if (mag1 === 0 || mag2 === 0) return true;
+	const cosAngle = Math.min(1, Math.max(-1, (v1x * v2x + v1y * v2y) / (mag1 * mag2)));
+	const angle = Math.acos(cosAngle);
+	return angle > angleThreshold;
+}
+
+function reduceStroke(points: StrokePoint[]): StrokePoint[] {
+	if (points.length < 3) return points;
+	const { smoothingStrength, cornerAngleThreshold, slowSpeed, fastSpeed } = strokeTuning;
+	const minSpacing = 0.3 + smoothingStrength * 2.5;
+	const maxSpacing = 1.2 + smoothingStrength * 10.0;
+
+	const reduced: StrokePoint[] = [points[0]];
+	for (let i = 1; i < points.length - 1; i += 1) {
+		const curr = points[i];
+		if (isCornerPoint(points, i, cornerAngleThreshold)) {
+			reduced.push(curr);
+			continue;
+		}
+		const prev = reduced[reduced.length - 1];
+		const dx = curr.x - prev.x;
+		const dy = curr.y - prev.y;
+		const dist = Math.hypot(dx, dy);
+		const dt = Math.max(1, curr.t - prev.t);
+		const speed = dist / dt;
+		const normalized = Math.min(1, Math.max(0, (speed - slowSpeed) / (fastSpeed - slowSpeed)));
+		const targetSpacing = minSpacing + (maxSpacing - minSpacing) * normalized;
+		if (dist < targetSpacing) continue;
+		reduced.push(curr);
+	}
+	reduced.push(points[points.length - 1]);
+	return reduced;
+}
+
+function computeCorners(points: StrokePoint[], angleThreshold: number): boolean[] {
+	if (points.length === 0) return [];
+	const corners = new Array(points.length).fill(false);
+	corners[0] = true;
+	corners[points.length - 1] = true;
+	for (let i = 1; i < points.length - 1; i += 1) {
+		corners[i] = isCornerPoint(points, i, angleThreshold);
+	}
+	return corners;
+}
+
+function finalizeStroke(stroke: Stroke): void {
+	stroke.points = reduceStroke(stroke.points);
+	stroke.bounding = calculateBoundingBox([stroke]) ?? undefined;
+	stroke.corners = computeCorners(stroke.points, strokeTuning.cornerAngleThreshold);
+}
 
 function getCanvasFitElement(): HTMLDivElement | null {
 	return document.querySelector('.canvas-fit') as HTMLDivElement | null;
@@ -173,7 +247,8 @@ export async function drawDemoStroke(
 		id: createStrokeId(),
 		points: [{ x: canvasPath[0].x, y: canvasPath[0].y, t: 0 }],
 		color: options.color ?? canvasToolbarState.brushColor,
-		size: options.size ?? canvasToolbarState.brushSize
+		size: options.size ?? canvasToolbarState.brushSize,
+		layer: canvasToolbarState.activeLayer
 	};
 
 	addStroke(stroke);
@@ -202,6 +277,7 @@ export async function drawDemoStroke(
 	demoCursor.clicking = false;
 	demoCursor.dragging = false;
 
+	finalizeStroke(stroke);
 	updateStroke(stroke);
 	requestRender();
 	options.onComplete?.();

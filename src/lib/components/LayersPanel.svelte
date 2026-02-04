@@ -4,9 +4,10 @@
 	import { setActiveLayer, getActiveLayer } from '$lib/stores/canvasToolbar.svelte';
 
 	const layers = [
-		{ id: Layer.BACKGROUND, label: 'Background' },
 		{ id: Layer.START, label: 'Start' },
-		{ id: Layer.END, label: 'End' }
+		{ id: Layer.MOTION, label: 'Motion' },
+		{ id: Layer.END, label: 'End' },
+		{ id: Layer.FINAL, label: 'Final' }
 	] as const;
 
 	const activeLayer = $derived(getActiveLayer());

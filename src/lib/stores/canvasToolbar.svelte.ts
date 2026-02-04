@@ -1,5 +1,6 @@
 import { Layer } from '$lib/types';
 import { BRUSH_SIZES, COLORS } from '$lib/utils/constants';
+import { requestRender } from './canvas.svelte';
 import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
 
 export interface CanvasToolbarState {
@@ -32,6 +33,8 @@ export function setActiveLayer(layer: Layer, elementId?: string, options?: Curso
 	moveCursorToElement(elementId, {
 		onComplete: () => {
 			canvasToolbarState.activeLayer = layer;
+			canvasToolbarState.selectedIds = [];
+			requestRender();
 		},
 		...options
 	});

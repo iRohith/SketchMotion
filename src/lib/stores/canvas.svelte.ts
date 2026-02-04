@@ -202,7 +202,9 @@ export function isPointOnStroke(point: Point, stroke: Stroke) {
 }
 
 export function recomputeGroups() {
-	const strokeArray = Array.from(strokes.values());
+	const strokeArray = Array.from(strokes.values()).filter(
+		(stroke) => stroke.layer === canvasToolbarState.activeLayer
+	);
 	const result = computeGroups(strokeArray, groupingSettings);
 
 	strokeGroupMap.clear();

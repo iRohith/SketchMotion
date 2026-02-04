@@ -100,9 +100,15 @@ function enclosureScore(outer: StrokeFeatures, inner: StrokeFeatures) {
 	const ratioScore = clamp01(
 		1 - Math.abs(ratio - GROUPING_CONFIG.enclosureRatioTarget) / GROUPING_CONFIG.enclosureRatioRange
 	);
-	const outerSizeScore = 1 / (1 + outerBounds.area / GROUPING_CONFIG.enclosureOuterAreaSoftCap);
+	const outerArea = outerBounds.area;
+	const softCap = GROUPING_CONFIG.enclosureOuterAreaSoftCap;
+	// Strongly penalize very large outer strokes while boosting small ones.
+	const outerSizeScore = Math.pow(1 / (1 + outerArea / softCap), 1.5);
+	const smallOuterBoost = clamp01(1 - outerArea / (softCap * 0.5));
+	const outerPenalty = clamp01(1 - outerArea / (softCap * 2));
+	const outerFactor = outerSizeScore * (0.6 + 0.4 * smallOuterBoost) * (0.5 + 0.5 * outerPenalty);
 
-	const rawScore = portion * ratioScore * outerSizeScore;
+	const rawScore = portion * ratioScore * outerFactor;
 	return clamp01(rawScore) * GROUPING_CONFIG.enclosureMaxScore;
 }
 
@@ -166,15 +172,19 @@ function computeStrokeFeatures(stroke: Stroke): StrokeFeatures | null {
 }
 
 function temporalScore(a: StrokeFeatures, b: StrokeFeatures, idleTime: number) {
-	const deltas = [
+	const delta = temporalDeltaMs(a, b);
+	const tau = Math.max(GROUPING_CONFIG.minTemporalTauMs, idleTime * 1000);
+	// Strongly prefer short gaps; longer gaps decay faster than linear.
+	return Math.exp(-Math.pow(delta / tau, 1.35));
+}
+
+function temporalDeltaMs(a: StrokeFeatures, b: StrokeFeatures) {
+	return Math.min(
 		Math.abs(a.startTime - b.startTime),
 		Math.abs(a.endTime - b.endTime),
 		Math.abs(a.endTime - b.startTime),
 		Math.abs(b.endTime - a.startTime)
-	];
-	const delta = Math.min(...deltas);
-	const tau = Math.max(GROUPING_CONFIG.minTemporalTauMs, idleTime * 1000);
-	return Math.exp(-delta / tau);
+	);
 }
 
 function spatialScore(a: StrokeFeatures, b: StrokeFeatures) {
@@ -254,13 +264,81 @@ function scorePair(a: StrokeFeatures, b: StrokeFeatures, settings: GroupingSetti
 	}
 
 	const { temporal, spatial, geometry, behavior } = GROUPING_CONFIG.weights;
-	return temporal * tScore + spatial * sScore + geometry * gScore + behavior * bScore;
+	const baseScore = temporal * tScore + spatial * sScore + geometry * gScore + behavior * bScore;
+
+	const delta = temporalDeltaMs(a, b);
+	const tau = Math.max(GROUPING_CONFIG.minTemporalTauMs, settings.idleTime * 1000);
+	const gapRatio = delta / tau;
+	const temporalPenalty = gapRatio <= 1 ? 1 : 1 / Math.pow(gapRatio, 1.2);
+	return baseScore * temporalPenalty;
 }
 
 export function computeGroups(strokes: Stroke[], settings: GroupingSettings): GroupingResult {
 	const features = strokes
 		.map((stroke) => computeStrokeFeatures(stroke))
 		.filter((feature): feature is StrokeFeatures => feature !== null);
+
+	const behaviorSummary = (() => {
+		if (features.length === 0) {
+			return {
+				meanSpeed: 0,
+				speedCv: 0,
+				meanGapMs: 0,
+				meanBrush: 0,
+				meanLength: 0
+			};
+		}
+
+		let sumSpeed = 0;
+		let sumSpeedSq = 0;
+		let sumBrush = 0;
+		let sumLength = 0;
+		for (const f of features) {
+			sumSpeed += f.speed;
+			sumSpeedSq += f.speed * f.speed;
+			sumBrush += f.brushSize;
+			sumLength += f.length;
+		}
+		const meanSpeed = sumSpeed / features.length;
+		const variance = Math.max(0, sumSpeedSq / features.length - meanSpeed * meanSpeed);
+		const speedStd = Math.sqrt(variance);
+		const speedCv = meanSpeed > 1e-3 ? speedStd / meanSpeed : 0;
+
+		const sortedByStart = [...features].sort((a, b) => a.startTime - b.startTime);
+		let gapSum = 0;
+		for (let i = 1; i < sortedByStart.length; i += 1) {
+			const prev = sortedByStart[i - 1];
+			const curr = sortedByStart[i];
+			gapSum += Math.max(0, curr.startTime - prev.endTime);
+		}
+		const meanGapMs = sortedByStart.length > 1 ? gapSum / (sortedByStart.length - 1) : 0;
+
+		return {
+			meanSpeed,
+			speedCv,
+			meanGapMs,
+			meanBrush: sumBrush / features.length,
+			meanLength: sumLength / features.length
+		};
+	})();
+
+	const behaviorFlow = (() => {
+		if (features.length === 0) return 0;
+		const gapNorm =
+			settings.idleTime > 0 ? behaviorSummary.meanGapMs / (settings.idleTime * 1000) : 0;
+		const gapScore = clamp01(1 - gapNorm / 1.5);
+		const speedConsistency = clamp01(1 - Math.min(2, behaviorSummary.speedCv) / 2);
+		return clamp01(0.6 * speedConsistency + 0.4 * gapScore);
+	})();
+
+	const dynamicIdleTime = settings.idleTime * (1 + 0.75 * (1 - behaviorFlow));
+	const dynamicSettings: GroupingSettings = {
+		...settings,
+		idleTime: dynamicIdleTime
+	};
+
+	// Be more conservative: only a small reduction for smooth behavior.
+	const behaviorThreshold = clamp01(settings.groupingThreshold - 0.05 * behaviorFlow);
 
 	const idToIndex = new Map<string, number>();
 	for (let i = 0; i < features.length; i += 1) {
@@ -286,8 +364,26 @@ export function computeGroups(strokes: Stroke[], settings: GroupingSettings): Gr
 
 	for (let i = 0; i < features.length; i += 1) {
 		for (let j = i + 1; j < features.length; j += 1) {
-			const score = scorePair(features[i], features[j], settings);
-			if (score >= settings.groupingThreshold) {
+			const a = features[i];
+			const b = features[j];
+			const score = scorePair(a, b, dynamicSettings);
+
+			const tScore = temporalScore(a, b, dynamicSettings.idleTime);
+			const sScore = spatialScore(a, b);
+			const gScore = geometryScore(a, b);
+
+			const affinity = (tScore + sScore) * 0.5;
+			const adaptiveThreshold = Math.max(
+				0.3,
+				behaviorThreshold - 0.1 * affinity - 0.04 * behaviorFlow
+			);
+
+			const delta = temporalDeltaMs(a, b);
+			const burstWindow =
+				Math.max(GROUPING_CONFIG.minTemporalTauMs, dynamicSettings.idleTime * 1000) * 1.1;
+			const burst = delta <= burstWindow && sScore >= 0.6 && (gScore >= 0.5 || sScore >= 0.75);
+
+			if (score >= adaptiveThreshold || (burst && score >= behaviorThreshold * 0.85)) {
 				union(i, j);
 			}
 		}

@@ -12,7 +12,7 @@
 		updateStroke
 	} from '$lib/stores/canvas.svelte';
 	import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
-	import type { Point, Stroke, StrokePoint, Transform } from '$lib/types';
+	import { Layer, type Point, type Stroke, type StrokePoint, type Transform } from '$lib/types';
 	import { untrack } from 'svelte';
 
 	type SelectionRect = { cx: number; cy: number; w: number; h: number; rot: number };
@@ -238,8 +238,9 @@
 		for (const stroke of strokes.values()) {
 			const pts = stroke.points;
 			if (pts.length === 0) continue;
+			const isActiveLayer = stroke.layer === canvasToolbarState.activeLayer;
 			const baseTransform = stroke.transform ?? IDENTITY;
-			const isSelected = canvasToolbarState.selectedIds.includes(stroke.id);
+			const isSelected = isActiveLayer && canvasToolbarState.selectedIds.includes(stroke.id);
 			const t =
 				activeTransform && isSelected
 					? multiplyTransform(activeTransform.delta, baseTransform)
@@ -250,10 +251,13 @@
 				mainCtx.save();
 				mainCtx.transform(t.a, t.b, t.c, t.d, t.e, t.f);
 			}
-			const isHovered = hoveredIds.has(stroke.id);
+			const isHovered = isActiveLayer && hoveredIds.has(stroke.id);
 			const baseLineWidth = stroke.size;
 			mainCtx.strokeStyle = stroke.color;
 			mainCtx.fillStyle = stroke.color;
+			if (canvasToolbarState.activeLayer !== Layer.FINAL && !isActiveLayer) {
+				mainCtx.globalAlpha = 0.5;
+			}
 			mainCtx.lineWidth = baseLineWidth;
 			if (pts.length === 1) {
 				const p = pts[0];
@@ -313,6 +317,7 @@
 				mainCtx.lineTo(last.x, last.y);
 				mainCtx.stroke();
 			}
+			mainCtx.globalAlpha = 1;
 			if (hasTransform) mainCtx.restore();
 		}
 	}
@@ -547,6 +552,7 @@
 		const list = Array.from(strokes.values());
 		for (let i = list.length - 1; i >= 0; i -= 1) {
 			const stroke = list[i];
+			if (stroke.layer !== canvasToolbarState.activeLayer) continue;
 			if (isPointOnStroke(canvasPos, stroke)) return stroke;
 		}
 		return null;
@@ -612,6 +618,17 @@
 					canvasToolbarState.selectedIds = [canvasToolbarState.hoveredStrokeId];
 				}
 				selectionBox = null;
+				if (!event.shiftKey) {
+					syncSelectionRect();
+					if (selectionRect) {
+						activeTransform = {
+							mode: 'move',
+							startPointer: { x: canvasPos.x, y: canvasPos.y },
+							startRect: selectionRect,
+							delta: IDENTITY
+						};
+					}
+				}
 			} else if (!event.shiftKey) {
 				canvasToolbarState.selectedIds = [];
 				selectionBox = {
@@ -632,7 +649,8 @@
 			id: createStrokeId(),
 			points: [{ x: canvasPos.x, y: canvasPos.y, t: performance.now() }],
 			color: canvasToolbarState.brushColor,
-			size: canvasToolbarState.brushSize
+			size: canvasToolbarState.brushSize,
+			layer: canvasToolbarState.activeLayer
 		};
 		addStroke(activeStroke);
 
@@ -665,7 +683,7 @@
 			const nextIds: string[] = [];
 			for (const stroke of strokes.values()) {
 				const bounds = stroke.bounding;
-				if (!bounds) continue;
+				if (!bounds || stroke.layer !== canvasToolbarState.activeLayer) continue;
 				const ix = Math.max(0, Math.min(bounds.maxX, boxMaxX) - Math.max(bounds.minX, boxMinX));
 				const iy = Math.max(0, Math.min(bounds.maxY, boxMaxY) - Math.max(bounds.minY, boxMinY));
 				const intersectionArea = ix * iy;
@@ -816,7 +834,7 @@
 
 <div class="canvas-frame">
 	<div
-		class="canvas-fit"
+		class="canvas-fit {canvasToolbarState.activeLayer === Layer.FINAL ? 'pointer-events-none' : ''}"
 		role="application"
 		aria-label="Canvas drawing area"
 		bind:this={canvasFitEl}
@@ -869,6 +887,7 @@
 		height: auto;
 		max-width: 100%;
 		max-height: 100%;
+		touch-action: none;
 	}
 
 	@container (min-aspect-ratio: 4/3) {
