@@ -11,14 +11,50 @@
 	import { BRUSH_SIZES } from '$lib/utils/constants';
 	import { Layer } from '$lib/types';
 	import ColorPalette from '../widgets/ColorPalette.svelte';
-	import { deleteAllStrokes, deleteSelectedStrokes } from '$lib/stores/canvas.svelte';
+	import {
+		deleteAllStrokes,
+		deleteSelectedStrokes,
+		redoStrokes,
+		undoStrokes
+	} from '$lib/stores/canvas.svelte';
+	import { canUndo, canRedo } from '$lib/stores/history.svelte';
+	import { onMount } from 'svelte';
 
 	const isFinal = $derived(getActiveLayer() === Layer.FINAL);
-	const canUndo = $derived(false);
-	const canRedo = $derived(true);
+	const canundo = $derived(canUndo());
+	const canredo = $derived(canRedo());
 
 	const isSelectMode = $derived(canvasToolbarState.mode === 'select');
 	const groupSelect = $derived(canvasToolbarState.groupSelect);
+
+	function isEditableTarget(target: EventTarget | null) {
+		if (!(target instanceof HTMLElement)) return false;
+		const tag = target.tagName.toLowerCase();
+		if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+		return target.isContentEditable;
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (!event.ctrlKey) return;
+		if (isEditableTarget(event.target)) return;
+		const key = event.key.toLowerCase();
+		if (key === 'z') {
+			event.preventDefault();
+			undoStrokes();
+			return;
+		}
+		if (key === 'y') {
+			event.preventDefault();
+			redoStrokes();
+		}
+	}
+
+	onMount(() => {
+		window.addEventListener('keydown', handleKeydown);
+		return () => {
+			window.removeEventListener('keydown', handleKeydown);
+		};
+	});
 
 	// Design System Configuration
 	const COLORS = {
@@ -87,18 +123,18 @@
 	<!-- Undo / Redo -->
 	{@render ToolbarButton(
 		'tool-undo',
-		isFinal || !canUndo,
+		isFinal || !canundo,
 		'Undo (Cmd/Ctrl+Z)',
-		undefined,
+		undoStrokes,
 		false,
 		'slate',
 		Undo2
 	)}
 	{@render ToolbarButton(
 		'tool-redo',
-		isFinal || !canRedo,
+		isFinal || !canredo,
 		'Redo (Cmd/Ctrl+Shift+Z)',
-		undefined,
+		redoStrokes,
 		false,
 		'slate',
 		Redo2

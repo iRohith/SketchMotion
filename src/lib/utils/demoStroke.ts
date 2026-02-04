@@ -4,7 +4,8 @@ import {
 	requestRender,
 	addStroke,
 	updateStroke,
-	calculateBoundingBox
+	calculateBoundingBox,
+	commitStrokeHistory
 } from '$lib/stores/canvas.svelte';
 import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 
@@ -279,6 +280,7 @@ export async function drawDemoStroke(
 
 	finalizeStroke(stroke);
 	updateStroke(stroke);
+	commitStrokeHistory();
 	requestRender();
 	options.onComplete?.();
 }

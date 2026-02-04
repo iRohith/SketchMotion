@@ -3,6 +3,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
 import { canvasToolbarState } from './canvasToolbar.svelte';
 import { computeGroups, type GroupingSettings } from '$lib/utils/grouping';
+import { pushStrokeHistory, undoStrokeHistory, redoStrokeHistory } from './history.svelte';
 
 export const IDENTITY: Transform = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
@@ -15,6 +16,28 @@ export const groupingSettings = $state<GroupingSettings>({
 	groupingThreshold: 0.5,
 	idleTime: 1.5
 });
+
+function applyStrokeSnapshot(snapshot: Stroke[]) {
+	strokes.clear();
+	for (const stroke of snapshot) {
+		strokes.set(stroke.id, stroke);
+	}
+	canvasToolbarState.selectedIds = [];
+	recomputeGroups();
+	requestRender();
+}
+
+export function commitStrokeHistory() {
+	pushStrokeHistory(strokes.values());
+}
+
+export function undoStrokes() {
+	undoStrokeHistory(applyStrokeSnapshot);
+}
+
+export function redoStrokes() {
+	redoStrokeHistory(applyStrokeSnapshot);
+}
 
 let groupRecomputeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -55,6 +78,7 @@ export function deleteSelectedStrokes(elementId?: string, options?: CursorOption
 			});
 			canvasToolbarState.selectedIds = [];
 			scheduleGroupRecompute();
+			commitStrokeHistory();
 			requestRender();
 		},
 		...options
@@ -68,6 +92,7 @@ export function deleteAllStrokes(elementId?: string, options?: CursorOptions) {
 			strokeGroupMap.clear();
 			groups.clear();
 			canvasToolbarState.selectedIds = [];
+			commitStrokeHistory();
 			requestRender();
 		},
 		...options

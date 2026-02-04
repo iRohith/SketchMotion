@@ -9,7 +9,8 @@
 		getHoveredGroupIds,
 		selectGroup,
 		addStroke,
-		updateStroke
+		updateStroke,
+		commitStrokeHistory
 	} from '$lib/stores/canvas.svelte';
 	import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 	import { Layer, type Point, type Stroke, type StrokePoint, type Transform } from '$lib/types';
@@ -670,6 +671,7 @@
 				updateStroke(stroke);
 			}
 			activeTransform = null;
+			commitStrokeHistory();
 			scheduleRender();
 			canvasFitEl?.releasePointerCapture(event.pointerId);
 			return;
@@ -710,6 +712,7 @@
 			activeStroke.points = reducedPoints;
 			refreshStrokeCache(activeStroke);
 			updateStroke(activeStroke);
+			commitStrokeHistory();
 			scheduleRender();
 		}
 		isDragging = false;
