@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Layer } from '$lib/types';
 
-	import { setActiveLayer, getActiveLayer } from '$lib/stores/canvas.svelte';
+	import { setActiveLayer, getActiveLayer } from '$lib/stores/canvasToolbar.svelte';
 
 	const layers = [
 		{ id: Layer.BACKGROUND, label: 'Background' },

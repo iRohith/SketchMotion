@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { Pen, Play, Power } from '@lucide/svelte';
+	import { Pen, Play, Power, Pencil } from '@lucide/svelte';
 	import { demoCursor, showCursor, hideCursor } from '$lib/stores/demoCursor.svelte';
+	import { drawDemoStroke } from '$lib/utils/demoStroke';
 
 	function toggleDemo() {
 		if (demoCursor.visible) {
@@ -12,6 +13,22 @@
 			}
 			showCursor();
 		}
+	}
+
+	function testStroke() {
+		if (!demoCursor.visible) {
+			showCursor();
+		}
+		const samplePath = [
+			{ x: 150, y: 300 },
+			{ x: 200, y: 200 },
+			{ x: 300, y: 250 },
+			{ x: 400, y: 150 },
+			{ x: 500, y: 200 },
+			{ x: 550, y: 300 },
+			{ x: 600, y: 250 }
+		];
+		drawDemoStroke(samplePath, { duration: 1500 });
 	}
 </script>
 
@@ -33,18 +50,28 @@
 			</div>
 		</div>
 
-		<button
-			onclick={toggleDemo}
-			class="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all active:scale-95 {demoCursor.visible
-				? 'border-emerald-500/30 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-				: 'border-red-500/30 bg-red-500/20 text-red-300 hover:bg-red-500/30'}"
-		>
-			<span>{demoCursor.visible ? 'Demo Active' : 'Demo Off'}</span>
-			{#if demoCursor.visible}
-				<Power size={14} class="animate-pulse" />
-			{:else}
-				<Play size={14} fill="currentColor" />
-			{/if}
-		</button>
+		<div class="flex items-center gap-2">
+			<button
+				onclick={testStroke}
+				class="flex items-center gap-2 rounded-full border border-purple-500/30 bg-purple-500/20 px-4 py-2 text-sm font-medium text-purple-300 transition-all hover:bg-purple-500/30 active:scale-95"
+			>
+				<Pencil size={14} />
+				<span>Test Stroke</span>
+			</button>
+
+			<button
+				onclick={toggleDemo}
+				class="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all active:scale-95 {demoCursor.visible
+					? 'border-emerald-500/30 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+					: 'border-red-500/30 bg-red-500/20 text-red-300 hover:bg-red-500/30'}"
+			>
+				<span>{demoCursor.visible ? 'Demo Active' : 'Demo Off'}</span>
+				{#if demoCursor.visible}
+					<Power size={14} class="animate-pulse" />
+				{:else}
+					<Play size={14} fill="currentColor" />
+				{/if}
+			</button>
+		</div>
 	</div>
 </header>

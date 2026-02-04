@@ -23,8 +23,32 @@ export interface StrokePoint extends Point {
 	t: number;
 }
 
+export interface BoundingBox {
+	minX: number;
+	minY: number;
+	maxX: number;
+	maxY: number;
+	width: number;
+	height: number;
+	centerX: number;
+	centerY: number;
+}
+
 export interface Stroke {
+	id: string;
 	points: StrokePoint[];
 	color: string;
-	width: number;
+	size: number;
+	transform?: Transform;
+	bounding?: BoundingBox;
+	corners?: boolean[];
+}
+
+export interface Transform {
+	a: number;
+	b: number;
+	c: number;
+	d: number;
+	e: number;
+	f: number;
 }
