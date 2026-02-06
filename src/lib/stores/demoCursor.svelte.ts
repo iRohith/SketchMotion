@@ -64,6 +64,22 @@ function cancelCurrentAnimation() {
 }
 
 /**
+ * Cancel all running cursor animations (exported for demo cleanup).
+ */
+export function cancelAllAnimations() {
+	if (currentAnimation) {
+		currentAnimation.cancel();
+		// Don't call complete here - we're cancelling abruptly
+		currentAnimation = null;
+	}
+	// Increment operation ID to invalidate any pending operations
+	activeOperationId++;
+	// Reset cursor interaction states
+	demoCursor.clicking = false;
+	demoCursor.dragging = false;
+}
+
+/**
  * High-level wrapper to targeting a specific element.
  * Handles finding, scrolling, and moving to the element.
  */
@@ -427,4 +443,82 @@ function getPointOnPath(path: Point[], t: number): Point {
 	}
 
 	return path[path.length - 1];
+}
+// -------------------------------------------------------------------------- //
+// Scheduling & Queue
+// -------------------------------------------------------------------------- //
+
+const actionQueue: (() => Promise<void>)[] = [];
+let isProcessingQueue = false;
+
+/**
+ * Adds an action to the sequential queue.
+ * Actions are processed one by one.
+ */
+export function queueAction(action: () => Promise<void>) {
+	actionQueue.push(action);
+	processQueue();
+}
+
+/**
+ * Clear the action queue (exported for demo cleanup).
+ */
+export function clearActionQueue() {
+	actionQueue.length = 0;
+	isProcessingQueue = false;
+}
+
+async function processQueue() {
+	if (isProcessingQueue) return;
+	if (actionQueue.length === 0) return;
+
+	isProcessingQueue = true;
+	while (actionQueue.length > 0) {
+		const action = actionQueue.shift();
+		if (action) {
+			try {
+				await action();
+			} catch (err) {
+				console.error('[DemoCursor] Queue action failed:', err);
+			}
+		}
+	}
+	isProcessingQueue = false;
+}
+
+/**
+ * Waits for an element with the given data-demo-id to appear in the DOM.
+ * Uses the MutationObserver from initLayoutRegistry to be efficient?
+ * Actually simpler to just poll given we rely on it specifically for demo flow.
+ */
+export async function waitForTarget(id: string, timeout = 5000): Promise<boolean> {
+	if (!demoCursor.visible) return false;
+
+	const start = performance.now();
+
+	// Check immediately
+	if (getElementTarget(id)) return true;
+
+	return new Promise((resolve) => {
+		const check = () => {
+			if (!demoCursor.visible) {
+				resolve(false);
+				return;
+			}
+
+			if (getElementTarget(id)) {
+				resolve(true);
+				return;
+			}
+
+			if (performance.now() - start > timeout) {
+				console.warn(`[DemoCursor] Timeout waiting for target: ${id}`);
+				resolve(false);
+				return;
+			}
+
+			requestAnimationFrame(check);
+		};
+		check();
+	});
 }

@@ -8,6 +8,7 @@
 	import StepPanel from '$lib/components/StepPanel.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import WorkspacePanel from '$lib/components/workspace/WorkspacePanel.svelte';
+	import { demoRunnerState } from '$lib/stores/demoRunner.svelte';
 </script>
 
 <DemoCursor />
@@ -18,6 +19,7 @@
 
 	<main
 		class="flex h-full min-h-0 w-full flex-1 flex-col gap-3 pt-3 lg:grid lg:grid-cols-[3fr_2fr] lg:grid-rows-[7fr_3fr]"
+		class:pointer-events-none={demoRunnerState.isRunning}
 	>
 		<div class="glass-panel order-1 aspect-4/3 lg:relative lg:order-0 lg:aspect-auto lg:h-auto">
 			<div

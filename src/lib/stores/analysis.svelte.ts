@@ -1,4 +1,221 @@
-import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
+import {
+	moveCursorToElement,
+	demoCursor,
+	queueAction,
+	waitForTarget,
+	type CursorOptions
+} from './demoCursor.svelte';
+import { canvasToScreen } from '$lib/utils/demoStroke';
+
+// --- Hover Types & State ---
+
+export type CanvasHover = {
+	type: 'ask' | 'result';
+	clusterId: string;
+	analysisItemId?: string;
+	position: { x: number; y: number };
+	title?: string;
+	content?: string;
+	visible: boolean;
+};
+
+export type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
+
+export const analysisHover = $state<{
+	current: CanvasHover | null;
+	askResolve: ((result: 'yes' | 'no' | 'dismissed') => void) | null;
+}>({
+	current: null,
+	askResolve: null
+});
+
+// --- Manual Analysis Trigger (for demo mode) ---
+
+let manualTriggerCallback: (() => void) | null = null;
+
+/**
+ * Register a callback to be called when triggerAnalysisNow is invoked.
+ * The AutoAnalysis component registers its runAccumulation function here.
+ */
+export function registerAnalysisTrigger(callback: () => void) {
+	manualTriggerCallback = callback;
+}
+
+/**
+ * Unregister the analysis trigger callback.
+ */
+export function unregisterAnalysisTrigger() {
+	manualTriggerCallback = null;
+}
+
+/**
+ * Trigger analysis immediately (for demo mode).
+ * This calls the registered callback (runAccumulation from AutoAnalysis).
+ */
+export function triggerAnalysisNow(): boolean {
+	if (manualTriggerCallback) {
+		manualTriggerCallback();
+		return true;
+	}
+	console.warn('[Analysis] No trigger callback registered');
+	return false;
+}
+
+// --- Hover Timeout Management ---
+
+const HOVER_TIMEOUT = 5000;
+let hoverTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+function startHoverTimeout() {
+	if (hoverTimeoutId) clearTimeout(hoverTimeoutId);
+	hoverTimeoutId = setTimeout(() => {
+		dismissHover('dismissed');
+	}, HOVER_TIMEOUT);
+}
+
+export function pauseHoverTimeout() {
+	if (hoverTimeoutId) {
+		clearTimeout(hoverTimeoutId);
+		hoverTimeoutId = null;
+	}
+}
+
+export function resumeHoverTimeout() {
+	if (analysisHover.current && analysisHover.current.visible) {
+		startHoverTimeout();
+	}
+}
+
+function getHoverPosition(bounds: BoundingBox): { x: number; y: number } {
+	// Position at bottom-center of the bounding box, converted to screen coords
+	const canvasPoint = {
+		x: (bounds.minX + bounds.maxX) / 2,
+		y: bounds.maxY + 15
+	};
+
+	const screenPoint = canvasToScreen(canvasPoint);
+	if (screenPoint) {
+		return {
+			x: Math.max(10, Math.min(screenPoint.x, window.innerWidth - 220)),
+			y: Math.min(screenPoint.y, window.innerHeight - 120)
+		};
+	}
+
+	// Fallback if canvas element not found
+	return { x: 100, y: 100 };
+}
+
+// --- Hover Trigger Functions ---
+
+export function showAskHover(
+	clusterId: string,
+	bounds: BoundingBox
+): Promise<'yes' | 'no' | 'dismissed'> {
+	return new Promise((resolve) => {
+		analysisHover.askResolve = resolve;
+		const position = getHoverPosition(bounds);
+		analysisHover.current = {
+			type: 'ask',
+			clusterId,
+			position,
+			visible: true
+		};
+		startHoverTimeout();
+
+		// Demo Auto-Interaction
+		if (demoCursor.visible) {
+			queueAction(async () => {
+				const btnId = `hover-ask-yes-${clusterId}`;
+				const found = await waitForTarget(btnId, 2000);
+				if (found && demoCursor.visible) {
+					await moveCursorToElement(btnId, {
+						action: 'click',
+						duration: 800,
+						onComplete: () => handleAskResponse('yes')
+					});
+				}
+			});
+		}
+	});
+}
+
+export function showResultHover(
+	clusterId: string,
+	analysisItemId: string,
+	bounds: BoundingBox,
+	title: string,
+	content: string
+) {
+	const position = getHoverPosition(bounds);
+	analysisHover.current = {
+		type: 'result',
+		clusterId,
+		analysisItemId,
+		position,
+		title,
+		content,
+		visible: true
+	};
+	startHoverTimeout();
+
+	// Demo Auto-Interaction
+	if (demoCursor.visible) {
+		queueAction(async () => {
+			const btnId = `hover-feedback-yes-${clusterId}`;
+			const found = await waitForTarget(btnId, 8000); // Wait longer for API
+			if (found && demoCursor.visible) {
+				await moveCursorToElement(btnId, {
+					action: 'click',
+					duration: 800,
+					onComplete: () => handleResultFeedback('yes')
+				});
+			}
+		});
+	}
+}
+
+export function dismissHover(result: 'yes' | 'no' | 'dismissed' = 'dismissed') {
+	if (hoverTimeoutId) {
+		clearTimeout(hoverTimeoutId);
+		hoverTimeoutId = null;
+	}
+	if (analysisHover.askResolve) {
+		analysisHover.askResolve(result);
+		analysisHover.askResolve = null;
+	}
+	if (analysisHover.current) {
+		analysisHover.current = { ...analysisHover.current, visible: false };
+		setTimeout(() => {
+			analysisHover.current = null;
+		}, 300);
+	}
+}
+
+export function handleAskResponse(response: 'yes' | 'no') {
+	const elementId = analysisHover.current
+		? `hover-ask-${response}-${analysisHover.current.clusterId}`
+		: undefined;
+	moveCursorToElement(elementId, {
+		onComplete: () => {
+			dismissHover(response);
+		}
+	});
+}
+
+export function handleResultFeedback(feedback: 'yes' | 'no') {
+	const elementId = analysisHover.current
+		? `hover-feedback-${feedback}-${analysisHover.current.clusterId}`
+		: undefined;
+	if (analysisHover.current?.analysisItemId) {
+		setAnalysisItemFeedback(analysisHover.current.analysisItemId, feedback, undefined, elementId, {
+			onComplete: () => {
+				dismissHover('dismissed');
+			}
+		});
+	}
+}
+
+// --- Analysis Results State ---
 
 export const analysisResults = $state({
 	items: [] as Array<{

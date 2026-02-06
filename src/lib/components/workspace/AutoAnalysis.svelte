@@ -13,53 +13,36 @@
 		addAnalysisItem,
 		updateAnalysisItem,
 		analysisResults,
-		setAnalysisItemFeedback
+		analysisHover,
+		showAskHover,
+		showResultHover,
+		dismissHover,
+		handleAskResponse,
+		handleResultFeedback,
+		pauseHoverTimeout,
+		resumeHoverTimeout,
+		registerAnalysisTrigger,
+		unregisterAnalysisTrigger
 	} from '$lib/stores/analysis.svelte';
+	import {
+		autoAnalysisState,
+		trackedClusters,
+		clearDebounceTimer,
+		setDebounceTimer,
+		type QueueItem
+	} from '$lib/stores/autoAnalysis.svelte';
+	import { onMount } from 'svelte';
 	import type { Stroke } from '$lib/types';
 	import { CircleCheck, CircleX } from '@lucide/svelte';
 	import { CANVAS_HEIGHT, CANVAS_WIDTH } from '$lib/utils/constants';
-	import { canvasToScreen } from '$lib/utils/demoStroke';
-	import { moveCursorToElement } from '$lib/stores/demoCursor.svelte';
-
-	type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
-
-	type QueueItem = {
-		id: string;
-		clusterId: string;
-		strokeIds: Set<string>;
-		timestamp: number;
-		status: 'pending' | 'awaiting' | 'sending' | 'sent';
-	};
-
-	type TrackedCluster = {
-		strokeIds: Set<string>;
-		analysisItemId: string | null;
-		bounds: BoundingBox;
-		lastUpdate: number;
-		skipped: boolean; // True if user ignored the ask prompt
-	};
-
-	type CanvasHover = {
-		type: 'ask' | 'result';
-		clusterId: string;
-		analysisItemId?: string;
-		position: { x: number; y: number };
-		title?: string;
-		content?: string;
-		visible: boolean;
-	};
+	import { demoCursor } from '$lib/stores/demoCursor.svelte';
 
 	// --- Configuration ---
 	const IDLE_THRESHOLD = 1500;
 	const SEND_DELAY = 1000;
-	const HOVER_TIMEOUT = 5000;
 
-	// --- State ---
-	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-	let analysisQueue = $state<QueueItem[]>([]);
-	let isSending = $state(false);
-	let lastSnapshotTime = 0;
-	let trackedClusters = new Map<string, TrackedCluster>();
+	// --- State (from store) ---
+	// Note: analysisQueue, isSending, lastSnapshotTime, trackedClusters now come from autoAnalysis store
 	let clientId = '';
 
 	// Initialize client ID
@@ -73,34 +56,43 @@
 		}
 	});
 
-	// Canvas hover notification
-	let canvasHover = $state<CanvasHover | null>(null);
-	let hoverTimeoutId: ReturnType<typeof setTimeout> | null = null;
-
-	// Resolve function for current ask prompt
-	let askResolve: ((result: 'yes' | 'no' | 'dismissed') => void) | null = null;
+	// Register manual trigger for demo mode
+	onMount(() => {
+		registerAnalysisTrigger(runAccumulation);
+		return () => unregisterAnalysisTrigger();
+	});
 
 	// --- Effects ---
 
 	// Trigger accumulation when groups change (after idle)
+	// In demo mode, skip the idle debounce
 	$effect(() => {
 		const version = groupState.version;
 		if (version < 0) return;
-		if (debounceTimer) clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => {
-			runAccumulation();
-		}, IDLE_THRESHOLD);
+
+		// In demo mode, skip idle debounce - wait for manual trigger
+		if (demoCursor.visible) {
+			clearDebounceTimer();
+			return;
+		}
+
+		clearDebounceTimer();
+		setDebounceTimer(
+			setTimeout(() => {
+				runAccumulation();
+			}, IDLE_THRESHOLD)
+		);
 		return () => {
-			if (debounceTimer) clearTimeout(debounceTimer);
+			clearDebounceTimer();
 		};
 	});
 
-	// Hide hover on drawing start - only reads isDrawing, uses untrack for canvasHover check
+	// Hide hover on drawing start - only reads isDrawing, uses untrack for analysisHover check
 	$effect(() => {
 		const isDrawing = canvasToolbarState.isDrawing;
 		if (isDrawing) {
 			untrack(() => {
-				if (canvasHover) {
+				if (analysisHover.current) {
 					dismissHover('dismissed');
 				}
 			});
@@ -136,11 +128,11 @@
 
 	// Process queue - triggered when queue changes, uses separate flag to avoid re-triggering
 	$effect(() => {
-		const queueLength = analysisQueue.length;
-		const sending = isSending;
+		const queueLength = autoAnalysisState.analysisQueue.length;
+		const sending = autoAnalysisState.isSending;
 		if (!sending && queueLength > 0) {
 			untrack(() => {
-				const pending = analysisQueue.find((i) => i.status === 'pending');
+				const pending = autoAnalysisState.analysisQueue.find((i) => i.status === 'pending');
 				if (pending) {
 					processQueueItem(pending);
 				}
@@ -154,9 +146,9 @@
 		void version;
 
 		untrack(() => {
-			if (!canvasHover) return;
+			if (!analysisHover.current) return;
 
-			const tracker = trackedClusters.get(canvasHover.clusterId);
+			const tracker = trackedClusters.get(analysisHover.current.clusterId);
 			if (!tracker) {
 				dismissHover('dismissed');
 				return;
@@ -177,123 +169,6 @@
 		});
 	});
 
-	// --- Hover Management ---
-
-	function getHoverPosition(bounds: BoundingBox): { x: number; y: number } {
-		// Position at bottom-center of the bounding box, converted to screen coords
-		const canvasPoint = {
-			x: (bounds.minX + bounds.maxX) / 2,
-			y: bounds.maxY + 15
-		};
-
-		const screenPoint = canvasToScreen(canvasPoint);
-		if (screenPoint) {
-			return {
-				x: Math.max(10, Math.min(screenPoint.x, window.innerWidth - 220)),
-				y: Math.min(screenPoint.y, window.innerHeight - 120)
-			};
-		}
-
-		// Fallback if canvas element not found
-		return { x: 100, y: 100 };
-	}
-
-	function showAskHover(
-		clusterId: string,
-		bounds: BoundingBox
-	): Promise<'yes' | 'no' | 'dismissed'> {
-		return new Promise((resolve) => {
-			askResolve = resolve;
-			const position = getHoverPosition(bounds);
-			canvasHover = {
-				type: 'ask',
-				clusterId,
-				position,
-				visible: true
-			};
-			startHoverTimeout();
-		});
-	}
-
-	function showResultHover(
-		clusterId: string,
-		analysisItemId: string,
-		bounds: BoundingBox,
-		title: string,
-		content: string
-	) {
-		const position = getHoverPosition(bounds);
-		canvasHover = {
-			type: 'result',
-			clusterId,
-			analysisItemId,
-			position,
-			title,
-			content,
-			visible: true
-		};
-		startHoverTimeout();
-	}
-
-	function startHoverTimeout() {
-		if (hoverTimeoutId) clearTimeout(hoverTimeoutId);
-		hoverTimeoutId = setTimeout(() => {
-			dismissHover('dismissed');
-		}, HOVER_TIMEOUT);
-	}
-
-	function pauseHoverTimeout() {
-		if (hoverTimeoutId) {
-			clearTimeout(hoverTimeoutId);
-			hoverTimeoutId = null;
-		}
-	}
-
-	function resumeHoverTimeout() {
-		if (canvasHover && canvasHover.visible) {
-			startHoverTimeout();
-		}
-	}
-
-	function dismissHover(result: 'yes' | 'no' | 'dismissed' = 'dismissed') {
-		if (hoverTimeoutId) {
-			clearTimeout(hoverTimeoutId);
-			hoverTimeoutId = null;
-		}
-		if (askResolve) {
-			askResolve(result);
-			askResolve = null;
-		}
-		if (canvasHover) {
-			canvasHover = { ...canvasHover, visible: false };
-			setTimeout(() => {
-				canvasHover = null;
-			}, 300);
-		}
-	}
-
-	function handleAskResponse(response: 'yes' | 'no') {
-		const elementId = canvasHover ? `hover-ask-${response}-${canvasHover.clusterId}` : undefined;
-		moveCursorToElement(elementId, {
-			onComplete: () => {
-				dismissHover(response);
-			}
-		});
-	}
-
-	function handleResultFeedback(feedback: 'yes' | 'no') {
-		const elementId = canvasHover
-			? `hover-feedback-${feedback}-${canvasHover.clusterId}`
-			: undefined;
-		if (canvasHover?.analysisItemId) {
-			setAnalysisItemFeedback(canvasHover.analysisItemId, feedback, undefined, elementId, {
-				onComplete: () => {
-					dismissHover('dismissed');
-				}
-			});
-		}
-	}
-
 	// --- Core Logic ---
 
 	function runAccumulation() {
@@ -304,7 +179,7 @@
 
 		const spatialClusters = clusterSetsSpatially(currentGroupSets);
 
-		let maxTimeFound = lastSnapshotTime;
+		let maxTimeFound = autoAnalysisState.lastSnapshotTime;
 
 		for (const clusterStrokeIds of spatialClusters) {
 			const clusterStrokes = getStrokeList(clusterStrokeIds);
@@ -316,7 +191,7 @@
 			let hasNewContent = false;
 			for (const s of clusterStrokes) {
 				const endT = s.points[s.points.length - 1]?.t || 0;
-				if (endT > lastSnapshotTime) {
+				if (endT > autoAnalysisState.lastSnapshotTime) {
 					hasNewContent = true;
 				}
 				if (endT > maxTimeFound) maxTimeFound = endT;
@@ -367,7 +242,7 @@
 			}
 		}
 
-		lastSnapshotTime = maxTimeFound;
+		autoAnalysisState.lastSnapshotTime = maxTimeFound;
 	}
 
 	/**
@@ -406,16 +281,16 @@
 	}
 
 	function queueCluster(clusterId: string, strokeIds: Set<string>) {
-		const existingQ = analysisQueue.find(
+		const existingQ = autoAnalysisState.analysisQueue.find(
 			(q) => q.clusterId === clusterId && (q.status === 'pending' || q.status === 'awaiting')
 		);
 		if (existingQ) {
 			existingQ.strokeIds = strokeIds;
 			existingQ.timestamp = Date.now();
-			analysisQueue = [...analysisQueue];
+			autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
 		} else {
-			analysisQueue = [
-				...analysisQueue,
+			autoAnalysisState.analysisQueue = [
+				...autoAnalysisState.analysisQueue,
 				{
 					id: crypto.randomUUID(),
 					clusterId,
@@ -506,39 +381,45 @@
 	// --- API Processing ---
 
 	async function processQueueItem(item: QueueItem) {
-		isSending = true;
+		autoAnalysisState.isSending = true;
 
 		const tracker = trackedClusters.get(item.clusterId);
 		if (!tracker || tracker.strokeIds.size === 0) {
-			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
-			isSending = false;
+			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+				(i) => i.id !== item.id
+			);
+			autoAnalysisState.isSending = false;
 			return;
 		}
 
 		// Show "Analyze this?" prompt
 		item.status = 'awaiting';
-		analysisQueue = [...analysisQueue];
+		autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
 
 		const askResult = await showAskHover(item.clusterId, tracker.bounds);
 
 		if (askResult === 'no') {
 			// User declined, remove from queue
-			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
-			isSending = false;
+			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+				(i) => i.id !== item.id
+			);
+			autoAnalysisState.isSending = false;
 			return;
 		}
 
 		if (askResult === 'dismissed') {
 			// User started drawing or timeout - mark as skipped
 			tracker.skipped = true;
-			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
-			isSending = false;
+			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+				(i) => i.id !== item.id
+			);
+			autoAnalysisState.isSending = false;
 			return;
 		}
 
 		// User clicked Yes, proceed with analysis
 		item.status = 'sending';
-		analysisQueue = [...analysisQueue];
+		autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
 
 		try {
 			await new Promise((r) => setTimeout(r, SEND_DELAY));
@@ -552,7 +433,7 @@
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					'x-client-id': clientId
+					'x-client-id': demoCursor.visible ? 'DEMO_SESSION_123' : clientId
 				},
 				body: JSON.stringify({
 					image,
@@ -564,9 +445,9 @@
 			if (response.status === 429) {
 				console.warn('[AutoAnalysis] Throttled. Waiting 5s before retry.');
 				item.status = 'pending';
-				analysisQueue = [...analysisQueue];
+				autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
 				await new Promise((r) => setTimeout(r, 5000));
-				isSending = false;
+				autoAnalysisState.isSending = false;
 				return;
 			}
 
@@ -613,12 +494,16 @@
 				showResultHover(item.clusterId, newAnalysisId, tracker.bounds, data.title, data.content);
 			}
 
-			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
+			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+				(i) => i.id !== item.id
+			);
 		} catch (e) {
 			console.error('[AutoAnalysis] Error:', e);
-			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
+			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+				(i) => i.id !== item.id
+			);
 		} finally {
-			isSending = false;
+			autoAnalysisState.isSending = false;
 		}
 	}
 
@@ -678,17 +563,17 @@
 </script>
 
 <!-- Canvas Hover Notification -->
-{#if canvasHover && canvasHover.visible}
+{#if analysisHover.current && analysisHover.current.visible}
 	<div
 		class="pointer-events-auto fixed z-50 rounded-lg border border-white/20 bg-black/80 px-3 py-2 shadow-xl backdrop-blur-sm"
-		style="left: {canvasHover.position.x}px; top: {canvasHover.position.y}px;"
+		style="left: {analysisHover.current.position.x}px; top: {analysisHover.current.position.y}px;"
 		transition:fade={{ duration: 200 }}
 		onpointerenter={pauseHoverTimeout}
 		onpointerleave={resumeHoverTimeout}
 		role="dialog"
 		tabindex="-1"
 	>
-		{#if canvasHover.type === 'ask'}
+		{#if analysisHover.current.type === 'ask'}
 			<!-- Pre-Analysis Prompt -->
 			<div class="flex items-center gap-3">
 				<span class="text-sm text-white/80">Analyze?</span>
@@ -697,7 +582,7 @@
 						class="rounded-full p-1 text-green-400 transition-colors hover:bg-green-400/20"
 						onclick={() => handleAskResponse('yes')}
 						title="Yes"
-						data-demo-id="hover-ask-yes-{canvasHover.clusterId}"
+						data-demo-id="hover-ask-yes-{analysisHover.current.clusterId}"
 					>
 						<CircleCheck size={18} />
 					</button>
@@ -705,17 +590,17 @@
 						class="rounded-full p-1 text-red-400 transition-colors hover:bg-red-400/20"
 						onclick={() => handleAskResponse('no')}
 						title="No"
-						data-demo-id="hover-ask-no-{canvasHover.clusterId}"
+						data-demo-id="hover-ask-no-{analysisHover.current.clusterId}"
 					>
 						<CircleX size={18} />
 					</button>
 				</div>
 			</div>
-		{:else if canvasHover.type === 'result'}
+		{:else if analysisHover.current.type === 'result'}
 			<!-- Post-Analysis Result -->
 			<div class="flex max-w-xs flex-col gap-2">
-				<div class="text-sm font-medium text-white">{canvasHover.title}</div>
-				<div class="line-clamp-2 text-xs text-white/60">{canvasHover.content}</div>
+				<div class="text-sm font-medium text-white">{analysisHover.current.title}</div>
+				<div class="line-clamp-2 text-xs text-white/60">{analysisHover.current.content}</div>
 				<div class="flex items-center gap-2 border-t border-white/10 pt-2">
 					<span class="text-xs text-white/50">Correct?</span>
 					<div class="flex gap-1">
@@ -723,7 +608,7 @@
 							class="rounded-full p-1 text-green-400 transition-colors hover:bg-green-400/20"
 							onclick={() => handleResultFeedback('yes')}
 							title="Yes"
-							data-demo-id="hover-feedback-yes-{canvasHover.clusterId}"
+							data-demo-id="hover-feedback-yes-{analysisHover.current.clusterId}"
 						>
 							<CircleCheck size={16} />
 						</button>
@@ -731,7 +616,7 @@
 							class="rounded-full p-1 text-red-400 transition-colors hover:bg-red-400/20"
 							onclick={() => handleResultFeedback('no')}
 							title="No"
-							data-demo-id="hover-feedback-no-{canvasHover.clusterId}"
+							data-demo-id="hover-feedback-no-{analysisHover.current.clusterId}"
 						>
 							<CircleX size={16} />
 						</button>
