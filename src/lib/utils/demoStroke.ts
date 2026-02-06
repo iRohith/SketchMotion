@@ -8,9 +8,7 @@ import {
 	commitStrokeHistory
 } from '$lib/stores/canvas.svelte';
 import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
-
-const CANVAS_WIDTH = 800;
-const CANVAS_HEIGHT = 600;
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from './constants';
 
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
 

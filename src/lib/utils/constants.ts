@@ -31,3 +31,6 @@ export const COLORS = {
 } as const;
 
 export const BRUSH_SIZES = [2, 5, 10, 20] as const;
+
+export const CANVAS_WIDTH = 800;
+export const CANVAS_HEIGHT = 600;

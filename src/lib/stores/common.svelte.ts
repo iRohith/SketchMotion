@@ -1,7 +1,7 @@
 import { PipelineState } from '$lib/types';
 import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
 
-const pipelineState = $state({
+export const pipelineState = $state({
 	selectedStep: PipelineState.ANALYZING,
 	finishedStep: PipelineState.COMPLETE
 });

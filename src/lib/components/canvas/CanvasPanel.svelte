@@ -14,6 +14,7 @@
 	} from '$lib/stores/canvas.svelte';
 	import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 	import { Layer, type Point, type Stroke, type StrokePoint, type Transform } from '$lib/types';
+	import { CANVAS_HEIGHT, CANVAS_WIDTH } from '$lib/utils/constants';
 	import { untrack } from 'svelte';
 
 	type SelectionRect = { cx: number; cy: number; w: number; h: number; rot: number };
@@ -234,7 +235,9 @@
 
 		const angleThreshold = strokeTuning.cornerAngleThreshold;
 		const smoothingStrength = strokeTuning.smoothingStrength;
+
 		const hoveredIds = new Set(getHoveredGroupIds());
+		const externalHighlightIds = canvasToolbarState.highlightedStrokeIds;
 
 		for (const stroke of strokes.values()) {
 			const pts = stroke.points;
@@ -252,7 +255,8 @@
 				mainCtx.save();
 				mainCtx.transform(t.a, t.b, t.c, t.d, t.e, t.f);
 			}
-			const isHovered = isActiveLayer && hoveredIds.has(stroke.id);
+			const isHovered =
+				isActiveLayer && (hoveredIds.has(stroke.id) || externalHighlightIds.has(stroke.id));
 			const baseLineWidth = stroke.size;
 			mainCtx.strokeStyle = stroke.color;
 			mainCtx.fillStyle = stroke.color;
@@ -850,8 +854,8 @@
 	>
 		<!-- Main drawing -->
 		<canvas
-			width="800"
-			height="600"
+			width={CANVAS_WIDTH}
+			height={CANVAS_HEIGHT}
 			class="pointer-events-none absolute inset-0 h-full w-full bg-black"
 			bind:this={mainCanvasEl}
 		></canvas>

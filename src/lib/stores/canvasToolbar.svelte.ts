@@ -12,6 +12,7 @@ export interface CanvasToolbarState {
 	brushColor: string;
 	backgroundColor: string;
 	hoveredStrokeId: string | null;
+	highlightedStrokeIds: Set<string>;
 }
 
 export const canvasToolbarState: CanvasToolbarState = $state({
@@ -22,7 +23,8 @@ export const canvasToolbarState: CanvasToolbarState = $state({
 	brushSize: BRUSH_SIZES[1],
 	brushColor: COLORS.white,
 	backgroundColor: COLORS.black,
-	hoveredStrokeId: null
+	hoveredStrokeId: null,
+	highlightedStrokeIds: new Set()
 });
 
 export function getCanvasToolbarState() {

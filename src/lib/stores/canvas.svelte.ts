@@ -1,5 +1,4 @@
 import type { BoundingBox, Point, Stroke, Transform } from '$lib/types';
-import { SvelteMap } from 'svelte/reactivity';
 import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
 import { canvasToolbarState } from './canvasToolbar.svelte';
 import { computeGroups, type GroupingSettings } from '$lib/utils/grouping';
@@ -7,10 +6,11 @@ import { pushStrokeHistory, undoStrokeHistory, redoStrokeHistory } from './histo
 
 export const IDENTITY: Transform = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
-export const strokes = new SvelteMap<string, Stroke>();
-export const strokeGroupMap = new SvelteMap<string, string>();
-export const groups = new SvelteMap<string, Set<string>>();
+export const strokes = new Map<string, Stroke>();
+export const strokeGroupMap = new Map<string, string>();
+export const groups = new Map<string, Set<string>>();
 export const renderPendingStore = $state({ renderPending: false });
+export const groupState = $state({ version: 0 });
 
 export const groupingSettings = $state<GroupingSettings>({
 	groupingThreshold: 0.5,
@@ -58,7 +58,6 @@ export function addStroke(stroke: Stroke) {
 
 export function updateStroke(stroke: Stroke) {
 	strokes.set(stroke.id, stroke);
-	scheduleGroupRecompute();
 }
 
 export function deleteStroke(strokeId: string) {
@@ -91,6 +90,7 @@ export function deleteAllStrokes(elementId?: string, options?: CursorOptions) {
 			strokes.clear();
 			strokeGroupMap.clear();
 			groups.clear();
+			groupState.version++;
 			canvasToolbarState.selectedIds = [];
 			commitStrokeHistory();
 			requestRender();
@@ -139,7 +139,6 @@ export function calculateBoundingBox(strokes: Stroke[]): BoundingBox | null {
 	let maxX = -Infinity,
 		maxY = -Infinity;
 
-	// Calculate axis-aligned bounds from transformed points
 	let maxScale = 1;
 	strokes.forEach((stroke) => {
 		const t = stroke.transform ?? IDENTITY;
@@ -154,7 +153,6 @@ export function calculateBoundingBox(strokes: Stroke[]): BoundingBox | null {
 		});
 	});
 
-	// Add padding for brush size
 	const maxBrushSize = Math.max(...strokes.map((s) => s.size));
 	const padding = (maxBrushSize * maxScale) / 2;
 
@@ -241,6 +239,7 @@ export function recomputeGroups() {
 	for (const [groupId, strokeIds] of result.groups) {
 		groups.set(groupId, strokeIds);
 	}
+	groupState.version++;
 }
 
 export function getGroupIdForStroke(strokeId: string): string | undefined {
