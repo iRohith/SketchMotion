@@ -85,7 +85,7 @@ function getCanvasFitElement(): HTMLDivElement | null {
 	return document.querySelector('.canvas-fit') as HTMLDivElement | null;
 }
 
-function canvasToScreen(canvasPoint: Point): Point | null {
+export function canvasToScreen(canvasPoint: Point): Point | null {
 	const fitEl = getCanvasFitElement();
 	if (!fitEl) return null;
 

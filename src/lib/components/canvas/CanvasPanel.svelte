@@ -650,6 +650,7 @@
 		}
 
 		isDragging = true;
+		canvasToolbarState.isDrawing = true;
 		activeStroke = {
 			id: createStrokeId(),
 			points: [{ x: canvasPos.x, y: canvasPos.y, t: performance.now() }],
@@ -717,6 +718,7 @@
 			refreshStrokeCache(activeStroke);
 			updateStroke(activeStroke);
 			commitStrokeHistory();
+			canvasToolbarState.isDrawing = false;
 			scheduleRender();
 		}
 		isDragging = false;

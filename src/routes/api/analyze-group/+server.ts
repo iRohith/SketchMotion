@@ -1,23 +1,26 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-let lastRequestTime = 0;
-const THROTTLE_MS = 5000;
+export const POST: RequestHandler = async ({ request, platform }) => {
+	// Rate limiting via Cloudflare binding
+	if (platform?.env?.ANALYSIS_LIMITER) {
+		const clientId = request.headers.get('x-client-id');
+		if (!clientId) {
+			return json({ success: false, error: 'Missing client ID' }, { status: 400 });
+		}
 
-export const POST: RequestHandler = async ({ request }) => {
-	const now = Date.now();
-	if (now - lastRequestTime < THROTTLE_MS) {
-		return json(
-			{
-				success: false,
-				error: 'Too many requests',
-				retryAfter: Math.ceil((THROTTLE_MS - (now - lastRequestTime)) / 1000)
-			},
-			{ status: 429 }
-		);
+		const { success } = await platform.env.ANALYSIS_LIMITER.limit({ key: clientId });
+		if (!success) {
+			return json(
+				{
+					success: false,
+					error: 'Too many requests',
+					retryAfter: 10 // Default fallback, actual info is in result headers if needed
+				},
+				{ status: 429 }
+			);
+		}
 	}
-	lastRequestTime = now;
-
 	try {
 		const data = (await request.json()) as { image: string; groupId: string; timestamp: number };
 		const { image, groupId, timestamp } = data;

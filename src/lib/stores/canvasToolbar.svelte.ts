@@ -13,6 +13,7 @@ export interface CanvasToolbarState {
 	backgroundColor: string;
 	hoveredStrokeId: string | null;
 	highlightedStrokeIds: Set<string>;
+	isDrawing: boolean;
 }
 
 export const canvasToolbarState: CanvasToolbarState = $state({
@@ -24,7 +25,8 @@ export const canvasToolbarState: CanvasToolbarState = $state({
 	brushColor: COLORS.white,
 	backgroundColor: COLORS.black,
 	hoveredStrokeId: null,
-	highlightedStrokeIds: new Set()
+	highlightedStrokeIds: new Set(),
+	isDrawing: false
 });
 
 export function getCanvasToolbarState() {
@@ -33,12 +35,13 @@ export function getCanvasToolbarState() {
 
 export function setActiveLayer(layer: Layer, elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			canvasToolbarState.activeLayer = layer;
 			canvasToolbarState.selectedIds = [];
 			requestRender();
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
@@ -48,10 +51,11 @@ export function getActiveLayer() {
 
 export function setMode(mode: 'brush' | 'select', elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			canvasToolbarState.mode = mode;
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
@@ -61,10 +65,11 @@ export function getMode() {
 
 export function setGroupSelect(groupSelect: boolean, elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			canvasToolbarState.groupSelect = groupSelect;
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
@@ -74,13 +79,14 @@ export function getGroupSelect() {
 
 export function setBrushSize(brushSize: number, elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			if (canvasToolbarState.mode == 'select') {
 				canvasToolbarState.mode = 'brush';
 			}
 			canvasToolbarState.brushSize = brushSize;
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
@@ -90,11 +96,12 @@ export function getBrushSize() {
 
 export function setBrushColor(brushColor: string, elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			canvasToolbarState.mode = 'brush';
 			canvasToolbarState.brushColor = brushColor;
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
@@ -108,10 +115,11 @@ export function setBackgroundColor(
 	options?: CursorOptions
 ) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			canvasToolbarState.backgroundColor = backgroundColor;
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 

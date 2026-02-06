@@ -71,6 +71,7 @@ export function requestRender() {
 
 export function deleteSelectedStrokes(elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			canvasToolbarState.selectedIds.forEach((id) => {
 				strokes.delete(id);
@@ -79,13 +80,14 @@ export function deleteSelectedStrokes(elementId?: string, options?: CursorOption
 			scheduleGroupRecompute();
 			commitStrokeHistory();
 			requestRender();
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
 export function deleteAllStrokes(elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			strokes.clear();
 			strokeGroupMap.clear();
@@ -94,8 +96,8 @@ export function deleteAllStrokes(elementId?: string, options?: CursorOptions) {
 			canvasToolbarState.selectedIds = [];
 			commitStrokeHistory();
 			requestRender();
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 

@@ -3,7 +3,9 @@
 declare global {
 	namespace App {
 		interface Platform {
-			env: Env;
+			env: {
+				ANALYSIS_LIMITER: RateLimit;
+			} & Env;
 			ctx: ExecutionContext;
 			caches: CacheStorage;
 			cf?: IncomingRequestCfProperties;

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { fade } from 'svelte/transition';
+	import { untrack } from 'svelte';
 	import {
 		strokes,
 		groupState,
@@ -10,50 +12,80 @@
 	import {
 		addAnalysisItem,
 		updateAnalysisItem,
-		analysisResults
+		analysisResults,
+		setAnalysisItemFeedback
 	} from '$lib/stores/analysis.svelte';
 	import type { Stroke } from '$lib/types';
+	import { CircleCheck, CircleX } from '@lucide/svelte';
+	import { CANVAS_HEIGHT, CANVAS_WIDTH } from '$lib/utils/constants';
+	import { canvasToScreen } from '$lib/utils/demoStroke';
+	import { moveCursorToElement } from '$lib/stores/demoCursor.svelte';
 
 	type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
 
-	// Local queue item for tracking analysis requests
 	type QueueItem = {
 		id: string;
 		clusterId: string;
 		strokeIds: Set<string>;
 		timestamp: number;
-		status: 'pending' | 'sending' | 'sent';
+		status: 'pending' | 'awaiting' | 'sending' | 'sent';
 	};
 
-	// Tracked cluster keeps track of stroke groups sent for analysis
 	type TrackedCluster = {
 		strokeIds: Set<string>;
 		analysisItemId: string | null;
 		bounds: BoundingBox;
 		lastUpdate: number;
+		skipped: boolean; // True if user ignored the ask prompt
+	};
+
+	type CanvasHover = {
+		type: 'ask' | 'result';
+		clusterId: string;
+		analysisItemId?: string;
+		position: { x: number; y: number };
+		title?: string;
+		content?: string;
+		visible: boolean;
 	};
 
 	// --- Configuration ---
-	const IDLE_THRESHOLD = 3000; // Wait 3s of idle before processing
-	const SEND_DELAY = 1000; // Delay between API calls
-	const CANVAS_WIDTH = 1920;
-	const CANVAS_HEIGHT = 1080;
+	const IDLE_THRESHOLD = 1500;
+	const SEND_DELAY = 1000;
+	const HOVER_TIMEOUT = 5000;
 
 	// --- State ---
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let analysisQueue = $state<QueueItem[]>([]);
 	let isSending = $state(false);
 	let lastSnapshotTime = 0;
-
-	// Map of ClusterId -> TrackedCluster
-	// Each TrackedCluster represents a set of strokes that have been (or will be) analyzed together.
 	let trackedClusters = new Map<string, TrackedCluster>();
+	let clientId = '';
+
+	// Initialize client ID
+	$effect(() => {
+		const stored = localStorage.getItem('sketch_client_id');
+		if (stored) {
+			clientId = stored;
+		} else {
+			clientId = crypto.randomUUID();
+			localStorage.setItem('sketch_client_id', clientId);
+		}
+	});
+
+	// Canvas hover notification
+	let canvasHover = $state<CanvasHover | null>(null);
+	let hoverTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+	// Resolve function for current ask prompt
+	let askResolve: ((result: 'yes' | 'no' | 'dismissed') => void) | null = null;
 
 	// --- Effects ---
 
 	// Trigger accumulation when groups change (after idle)
 	$effect(() => {
-		if (groupState.version < 0) return;
+		const version = groupState.version;
+		if (version < 0) return;
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			runAccumulation();
@@ -63,61 +95,213 @@
 		};
 	});
 
+	// Hide hover on drawing start - only reads isDrawing, uses untrack for canvasHover check
+	$effect(() => {
+		const isDrawing = canvasToolbarState.isDrawing;
+		if (isDrawing) {
+			untrack(() => {
+				if (canvasHover) {
+					dismissHover('dismissed');
+				}
+			});
+		}
+	});
+
 	// Highlight strokes on canvas when hovering analysis item
+	// Only reads hoveredItemId, writes to highlightedStrokeIds via untrack
 	$effect(() => {
 		const hoveredId = analysisResults.hoveredItemId;
-		if (hoveredId) {
-			let foundStrokes: Set<string> | null = null;
-			for (const tracker of trackedClusters.values()) {
-				if (tracker.analysisItemId === hoveredId) {
-					foundStrokes = tracker.strokeIds;
-					break;
+		untrack(() => {
+			if (hoveredId) {
+				let foundStrokes: Set<string> | null = null;
+				for (const tracker of trackedClusters.values()) {
+					if (tracker.analysisItemId === hoveredId) {
+						foundStrokes = tracker.strokeIds;
+						break;
+					}
 				}
-			}
-			if (foundStrokes) {
-				canvasToolbarState.highlightedStrokeIds = foundStrokes;
-				requestRender();
-			} else {
-				if (canvasToolbarState.highlightedStrokeIds.size > 0) {
+				if (foundStrokes) {
+					canvasToolbarState.highlightedStrokeIds = foundStrokes;
+					requestRender();
+				} else {
 					canvasToolbarState.highlightedStrokeIds = new Set();
 					requestRender();
 				}
-			}
-		} else {
-			if (canvasToolbarState.highlightedStrokeIds.size > 0) {
+			} else {
 				canvasToolbarState.highlightedStrokeIds = new Set();
 				requestRender();
 			}
+		});
+	});
+
+	// Process queue - triggered when queue changes, uses separate flag to avoid re-triggering
+	$effect(() => {
+		const queueLength = analysisQueue.length;
+		const sending = isSending;
+		if (!sending && queueLength > 0) {
+			untrack(() => {
+				const pending = analysisQueue.find((i) => i.status === 'pending');
+				if (pending) {
+					processQueueItem(pending);
+				}
+			});
 		}
 	});
 
-	// Process queue
+	// Dismiss hover when cluster strokes are deleted (via groupState.version)
 	$effect(() => {
-		if (!isSending && analysisQueue.length > 0) {
-			const pending = analysisQueue.find((i) => i.status === 'pending');
-			if (pending) {
-				processQueueItem(pending);
+		const version = groupState.version;
+		void version;
+
+		untrack(() => {
+			if (!canvasHover) return;
+
+			const tracker = trackedClusters.get(canvasHover.clusterId);
+			if (!tracker) {
+				dismissHover('dismissed');
+				return;
 			}
-		}
+
+			// Check if any strokes from this cluster still exist
+			let hasValidStrokes = false;
+			for (const strokeId of tracker.strokeIds) {
+				if (strokes.has(strokeId)) {
+					hasValidStrokes = true;
+					break;
+				}
+			}
+
+			if (!hasValidStrokes) {
+				dismissHover('dismissed');
+			}
+		});
 	});
+
+	// --- Hover Management ---
+
+	function getHoverPosition(bounds: BoundingBox): { x: number; y: number } {
+		// Position at bottom-center of the bounding box, converted to screen coords
+		const canvasPoint = {
+			x: (bounds.minX + bounds.maxX) / 2,
+			y: bounds.maxY + 15
+		};
+
+		const screenPoint = canvasToScreen(canvasPoint);
+		if (screenPoint) {
+			return {
+				x: Math.max(10, Math.min(screenPoint.x, window.innerWidth - 220)),
+				y: Math.min(screenPoint.y, window.innerHeight - 120)
+			};
+		}
+
+		// Fallback if canvas element not found
+		return { x: 100, y: 100 };
+	}
+
+	function showAskHover(
+		clusterId: string,
+		bounds: BoundingBox
+	): Promise<'yes' | 'no' | 'dismissed'> {
+		return new Promise((resolve) => {
+			askResolve = resolve;
+			const position = getHoverPosition(bounds);
+			canvasHover = {
+				type: 'ask',
+				clusterId,
+				position,
+				visible: true
+			};
+			startHoverTimeout();
+		});
+	}
+
+	function showResultHover(
+		clusterId: string,
+		analysisItemId: string,
+		bounds: BoundingBox,
+		title: string,
+		content: string
+	) {
+		const position = getHoverPosition(bounds);
+		canvasHover = {
+			type: 'result',
+			clusterId,
+			analysisItemId,
+			position,
+			title,
+			content,
+			visible: true
+		};
+		startHoverTimeout();
+	}
+
+	function startHoverTimeout() {
+		if (hoverTimeoutId) clearTimeout(hoverTimeoutId);
+		hoverTimeoutId = setTimeout(() => {
+			dismissHover('dismissed');
+		}, HOVER_TIMEOUT);
+	}
+
+	function pauseHoverTimeout() {
+		if (hoverTimeoutId) {
+			clearTimeout(hoverTimeoutId);
+			hoverTimeoutId = null;
+		}
+	}
+
+	function resumeHoverTimeout() {
+		if (canvasHover && canvasHover.visible) {
+			startHoverTimeout();
+		}
+	}
+
+	function dismissHover(result: 'yes' | 'no' | 'dismissed' = 'dismissed') {
+		if (hoverTimeoutId) {
+			clearTimeout(hoverTimeoutId);
+			hoverTimeoutId = null;
+		}
+		if (askResolve) {
+			askResolve(result);
+			askResolve = null;
+		}
+		if (canvasHover) {
+			canvasHover = { ...canvasHover, visible: false };
+			setTimeout(() => {
+				canvasHover = null;
+			}, 300);
+		}
+	}
+
+	function handleAskResponse(response: 'yes' | 'no') {
+		const elementId = canvasHover ? `hover-ask-${response}-${canvasHover.clusterId}` : undefined;
+		moveCursorToElement(elementId, {
+			onComplete: () => {
+				dismissHover(response);
+			}
+		});
+	}
+
+	function handleResultFeedback(feedback: 'yes' | 'no') {
+		const elementId = canvasHover
+			? `hover-feedback-${feedback}-${canvasHover.clusterId}`
+			: undefined;
+		if (canvasHover?.analysisItemId) {
+			setAnalysisItemFeedback(canvasHover.analysisItemId, feedback, undefined, elementId, {
+				onComplete: () => {
+					dismissHover('dismissed');
+				}
+			});
+		}
+	}
 
 	// --- Core Logic ---
 
-	/**
-	 * Main accumulation function.
-	 * 1. Gets current stroke groups from the canvas.
-	 * 2. Merges spatially/temporally close groups.
-	 * 3. Matches these clusters to existing tracked clusters using a scoring system.
-	 * 4. Queues modified clusters for analysis.
-	 */
 	function runAccumulation() {
 		if (strokes.size === 0) return;
 
-		// Get current groups from canvas grouping algorithm
 		const currentGroupSets: Set<string>[] = Array.from(groups.values()).map((s) => new Set(s));
 		if (currentGroupSets.length === 0) return;
 
-		// Step 1: Cluster spatially/temporally close groups
 		const spatialClusters = clusterSetsSpatially(currentGroupSets);
 
 		let maxTimeFound = lastSnapshotTime;
@@ -129,7 +313,6 @@
 			const bounds = calculateBoundingBox(clusterStrokes);
 			if (!bounds) continue;
 
-			// Check if this cluster has new content
 			let hasNewContent = false;
 			for (const s of clusterStrokes) {
 				const endT = s.points[s.points.length - 1]?.t || 0;
@@ -139,18 +322,13 @@
 				if (endT > maxTimeFound) maxTimeFound = endT;
 			}
 
-			// Step 2: Find best matching tracked cluster using scoring
-			const matchResult = findBestMatch(clusterStrokeIds, bounds);
+			const matchResult = findBestMatch(clusterStrokeIds);
 
 			if (matchResult.clusterId) {
-				// Merge into existing cluster
 				const tracker = trackedClusters.get(matchResult.clusterId)!;
-
-				// CRITICAL: Merge stroke IDs, don't replace
 				const mergedIds = new Set([...tracker.strokeIds, ...clusterStrokeIds]);
 				tracker.strokeIds = mergedIds;
 
-				// Update bounds to encompass all strokes
 				const allStrokes = getStrokeList(mergedIds);
 				const newBounds = calculateBoundingBox(allStrokes);
 				if (newBounds) {
@@ -163,12 +341,12 @@
 				}
 				tracker.lastUpdate = Date.now();
 
-				// Queue for re-analysis if there's new content
 				if (hasNewContent) {
+					// Unskip if user is drawing near this cluster again
+					tracker.skipped = false;
 					queueCluster(matchResult.clusterId, mergedIds);
 				}
 			} else {
-				// Create new cluster
 				const newClusterId = crypto.randomUUID();
 				trackedClusters.set(newClusterId, {
 					strokeIds: clusterStrokeIds,
@@ -179,10 +357,10 @@
 						maxX: bounds.maxX,
 						maxY: bounds.maxY
 					},
-					lastUpdate: Date.now()
+					lastUpdate: Date.now(),
+					skipped: false
 				});
 
-				// Queue for analysis
 				if (hasNewContent) {
 					queueCluster(newClusterId, clusterStrokeIds);
 				}
@@ -193,77 +371,48 @@
 	}
 
 	/**
-	 * Finds the best matching tracked cluster for a new set of strokes.
-	 * Returns null if no good match is found (meaning a new cluster should be created).
+	 * Find a tracked cluster that should be updated with the new strokes.
+	 * Returns a match ONLY if the old cluster's strokes are fully contained in the new set.
+	 * This ensures we only update an existing analysis when adding to the same drawing.
 	 */
-	function findBestMatch(
-		newStrokeIds: Set<string>,
-		newBounds: BoundingBox
-	): { clusterId: string | null; score: number } {
-		let bestClusterId: string | null = null;
-		let bestScore = -Infinity;
-
-		const SPATIAL_WEIGHT = 1.0;
-		const TEMPORAL_WEIGHT = 0.5;
-		const ANALYZED_PENALTY = 0.7; // Penalty for already analyzed
-		const FEEDBACK_PENALTY = 100; // Effectively block merging
-
-		const newTimeRange = getTimeRange(newStrokeIds);
-		const newArea = (newBounds.maxX - newBounds.minX) * (newBounds.maxY - newBounds.minY);
-
+	function findBestMatch(newStrokeIds: Set<string>): {
+		clusterId: string | null;
+		isContained: boolean;
+	} {
 		for (const [clusterId, tracker] of trackedClusters.entries()) {
-			// 1. Spatial Score: How much of the new strokes overlaps with existing?
-			const overlap = calculateOverlapArea(newBounds, tracker.bounds);
-			const overlapRatio = newArea > 0 ? overlap / newArea : 0;
-
-			// Skip if very little overlap
-			if (overlapRatio < 0.1) continue;
-
-			// 2. Temporal Score: How recent was the last update?
-			const timeGap = Math.max(0, newTimeRange.min - tracker.lastUpdate);
-			const temporalScore = Math.max(0, 1 - timeGap / 5000); // Decay over 5s
-
-			// 3. Penalty for already analyzed groups
-			let penalty = 0;
-			if (tracker.analysisItemId) {
-				const item = analysisResults.items.find((i) => i.id === tracker.analysisItemId);
-				if (item) {
-					if (item.feedback) {
-						// User gave feedback, don't touch this cluster
-						penalty = FEEDBACK_PENALTY;
-					} else {
-						penalty = ANALYZED_PENALTY;
-					}
+			// Check if ALL of tracker's strokes are in newStrokeIds (subset containment)
+			let allContained = true;
+			for (const strokeId of tracker.strokeIds) {
+				if (!newStrokeIds.has(strokeId)) {
+					allContained = false;
+					break;
 				}
 			}
 
-			const totalScore = overlapRatio * SPATIAL_WEIGHT + temporalScore * TEMPORAL_WEIGHT - penalty;
-
-			if (totalScore > bestScore) {
-				bestScore = totalScore;
-				bestClusterId = clusterId;
+			if (allContained) {
+				// If user gave feedback on this item, don't allow updates
+				if (tracker.analysisItemId) {
+					const item = analysisResults.items.find((i) => i.id === tracker.analysisItemId);
+					if (item?.feedback) {
+						// User interacted - don't merge, let new cluster be created
+						continue;
+					}
+				}
+				return { clusterId, isContained: true };
 			}
 		}
 
-		// Threshold: Only match if score is reasonably good
-		if (bestScore > 0.3) {
-			return { clusterId: bestClusterId, score: bestScore };
-		}
-		return { clusterId: null, score: 0 };
+		return { clusterId: null, isContained: false };
 	}
 
-	/**
-	 * Adds a cluster to the analysis queue.
-	 * If the cluster is already pending in the queue, updates it instead.
-	 */
 	function queueCluster(clusterId: string, strokeIds: Set<string>) {
 		const existingQ = analysisQueue.find(
-			(q) => q.clusterId === clusterId && q.status === 'pending'
+			(q) => q.clusterId === clusterId && (q.status === 'pending' || q.status === 'awaiting')
 		);
 		if (existingQ) {
 			existingQ.strokeIds = strokeIds;
 			existingQ.timestamp = Date.now();
-			analysisQueue = [...analysisQueue]; // Trigger reactivity
+			analysisQueue = [...analysisQueue];
 		} else {
 			analysisQueue = [
 				...analysisQueue,
@@ -278,10 +427,6 @@
 		}
 	}
 
-	/**
-	 * Clusters stroke groups spatially and temporally.
-	 * Groups that are close in space AND time get merged.
-	 */
 	function clusterSetsSpatially(sets: Set<string>[]): Set<string>[] {
 		const clusters = sets.map((s) => new Set(s));
 		let merged = true;
@@ -292,15 +437,12 @@
 				for (let j = i + 1; j < clusters.length; j++) {
 					if (clusters[j].size === 0) continue;
 
-					// Temporal check
 					const rangeA = getTimeRange(clusters[i]);
 					const rangeB = getTimeRange(clusters[j]);
 					const gap = Math.max(0, rangeB.min - rangeA.max, rangeA.min - rangeB.max);
 
-					// If too far apart in time, don't merge
 					if (gap > 3000) continue;
 
-					// Spatial check
 					if (checkOverlap(clusters[i], clusters[j])) {
 						for (const id of clusters[j]) clusters[i].add(id);
 						clusters[j].clear();
@@ -328,12 +470,6 @@
 		return { min, max };
 	}
 
-	function calculateOverlapArea(boxA: BoundingBox, boxB: BoundingBox): number {
-		const xOverlap = Math.max(0, Math.min(boxA.maxX, boxB.maxX) - Math.max(boxA.minX, boxB.minX));
-		const yOverlap = Math.max(0, Math.min(boxA.maxY, boxB.maxY) - Math.max(boxA.minY, boxB.minY));
-		return xOverlap * yOverlap;
-	}
-
 	function checkOverlap(setA: Set<string>, setB: Set<string>): boolean {
 		const boxA = calculateBoundingBox(getStrokeList(setA));
 		const boxB = calculateBoundingBox(getStrokeList(setB));
@@ -351,7 +487,6 @@
 
 		if (intersectionArea <= 0) return false;
 
-		// Require significant overlap
 		const areaA = (boxA.maxX - boxA.minX) * (boxA.maxY - boxA.minY);
 		const areaB = (boxB.maxX - boxB.minX) * (boxB.maxY - boxB.minY);
 		const minArea = Math.min(areaA, areaB);
@@ -372,37 +507,53 @@
 
 	async function processQueueItem(item: QueueItem) {
 		isSending = true;
+
+		const tracker = trackedClusters.get(item.clusterId);
+		if (!tracker || tracker.strokeIds.size === 0) {
+			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
+			isSending = false;
+			return;
+		}
+
+		// Show "Analyze this?" prompt
+		item.status = 'awaiting';
+		analysisQueue = [...analysisQueue];
+
+		const askResult = await showAskHover(item.clusterId, tracker.bounds);
+
+		if (askResult === 'no') {
+			// User declined, remove from queue
+			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
+			isSending = false;
+			return;
+		}
+
+		if (askResult === 'dismissed') {
+			// User started drawing or timeout - mark as skipped
+			tracker.skipped = true;
+			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
+			isSending = false;
+			return;
+		}
+
+		// User clicked Yes, proceed with analysis
 		item.status = 'sending';
 		analysisQueue = [...analysisQueue];
 
 		try {
 			await new Promise((r) => setTimeout(r, SEND_DELAY));
 
-			const tracker = trackedClusters.get(item.clusterId);
-			if (!tracker || tracker.strokeIds.size === 0) {
-				analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
-				return;
-			}
-
-			// IMPORTANT: Use tracker's strokeIds, not item's (tracker has the merged set)
 			const ids = Array.from(tracker.strokeIds).sort();
 			const image = await captureCanvasState(ids);
 
 			const existingAnalysisId = tracker.analysisItemId;
 
-			// Check if we should update or create new
-			let shouldCreateNew = false;
-			if (existingAnalysisId) {
-				const existingItem = analysisResults.items.find((i) => i.id === existingAnalysisId);
-				if (existingItem?.feedback) {
-					// Has feedback, create new item instead
-					shouldCreateNew = true;
-				}
-			}
-
 			const response = await fetch('/api/analyze-group', {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: {
+					'Content-Type': 'application/json',
+					'x-client-id': clientId
+				},
 				body: JSON.stringify({
 					image,
 					groupId: item.clusterId,
@@ -412,10 +563,10 @@
 
 			if (response.status === 429) {
 				console.warn('[AutoAnalysis] Throttled. Waiting 5s before retry.');
-				// Put back to pending and wait
 				item.status = 'pending';
 				analysisQueue = [...analysisQueue];
 				await new Promise((r) => setTimeout(r, 5000));
+				isSending = false;
 				return;
 			}
 
@@ -429,7 +580,11 @@
 			};
 
 			if (data.success && data.title && data.content) {
-				if (existingAnalysisId && !shouldCreateNew) {
+				let newAnalysisId: string;
+
+				// If this cluster already has an analysis item, update it.
+				// (findBestMatch already ensures we don't merge into items with feedback)
+				if (existingAnalysisId) {
 					updateAnalysisItem(
 						existingAnalysisId,
 						data.title,
@@ -438,9 +593,10 @@
 						image,
 						tracker.bounds
 					);
+					newAnalysisId = existingAnalysisId;
 					console.log('[AutoAnalysis] Updated item:', existingAnalysisId);
 				} else {
-					const newId = addAnalysisItem(
+					newAnalysisId = addAnalysisItem(
 						data.title,
 						data.content,
 						false,
@@ -449,9 +605,12 @@
 						image,
 						tracker.bounds
 					);
-					tracker.analysisItemId = newId;
-					console.log('[AutoAnalysis] Created item:', newId);
+					tracker.analysisItemId = newAnalysisId;
+					console.log('[AutoAnalysis] Created item:', newAnalysisId);
 				}
+
+				// Show result hover with Yes/No feedback
+				showResultHover(item.clusterId, newAnalysisId, tracker.bounds, data.title, data.content);
 			}
 
 			analysisQueue = analysisQueue.filter((i) => i.id !== item.id);
@@ -517,3 +676,68 @@
 		});
 	}
 </script>
+
+<!-- Canvas Hover Notification -->
+{#if canvasHover && canvasHover.visible}
+	<div
+		class="pointer-events-auto fixed z-50 rounded-lg border border-white/20 bg-black/80 px-3 py-2 shadow-xl backdrop-blur-sm"
+		style="left: {canvasHover.position.x}px; top: {canvasHover.position.y}px;"
+		transition:fade={{ duration: 200 }}
+		onpointerenter={pauseHoverTimeout}
+		onpointerleave={resumeHoverTimeout}
+		role="dialog"
+		tabindex="-1"
+	>
+		{#if canvasHover.type === 'ask'}
+			<!-- Pre-Analysis Prompt -->
+			<div class="flex items-center gap-3">
+				<span class="text-sm text-white/80">Analyze?</span>
+				<div class="flex gap-1">
+					<button
+						class="rounded-full p-1 text-green-400 transition-colors hover:bg-green-400/20"
+						onclick={() => handleAskResponse('yes')}
+						title="Yes"
+						data-demo-id="hover-ask-yes-{canvasHover.clusterId}"
+					>
+						<CircleCheck size={18} />
+					</button>
+					<button
+						class="rounded-full p-1 text-red-400 transition-colors hover:bg-red-400/20"
+						onclick={() => handleAskResponse('no')}
+						title="No"
+						data-demo-id="hover-ask-no-{canvasHover.clusterId}"
+					>
+						<CircleX size={18} />
+					</button>
+				</div>
+			</div>
+		{:else if canvasHover.type === 'result'}
+			<!-- Post-Analysis Result -->
+			<div class="flex max-w-xs flex-col gap-2">
+				<div class="text-sm font-medium text-white">{canvasHover.title}</div>
+				<div class="line-clamp-2 text-xs text-white/60">{canvasHover.content}</div>
+				<div class="flex items-center gap-2 border-t border-white/10 pt-2">
+					<span class="text-xs text-white/50">Correct?</span>
+					<div class="flex gap-1">
+						<button
+							class="rounded-full p-1 text-green-400 transition-colors hover:bg-green-400/20"
+							onclick={() => handleResultFeedback('yes')}
+							title="Yes"
+							data-demo-id="hover-feedback-yes-{canvasHover.clusterId}"
+						>
+							<CircleCheck size={16} />
+						</button>
+						<button
+							class="rounded-full p-1 text-red-400 transition-colors hover:bg-red-400/20"
+							onclick={() => handleResultFeedback('no')}
+							title="No"
+							data-demo-id="hover-feedback-no-{canvasHover.clusterId}"
+						>
+							<CircleX size={16} />
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
+	</div>
+{/if}

@@ -25,10 +25,11 @@ const timeoutIds = new Set<ReturnType<typeof setTimeout>>();
 
 export function addUserNote(content: string, elementId?: string, options?: CursorOptions) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			addAnalysisItem('User Note', content, true);
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
@@ -47,7 +48,7 @@ export function addAnalysisItem(
 		content,
 		expanded: true,
 		userModified,
-		userInteracted: false,
+		userInteracted: userModified,
 		feedback: null,
 		feedbackText: '',
 		objectId,
@@ -56,16 +57,22 @@ export function addAnalysisItem(
 		bounds
 	});
 
-	const collapseTimeout = setTimeout(() => {
+	const collapseCallback = () => {
 		timeoutIds.delete(collapseTimeout);
 
-		if (analysisResults.items.length > 1) {
+		// Only collapse previous item if:
+		// 1. There are at least 2 items
+		// 2. Current item is NOT user-modified (auto-analysis)
+		// 3. Previous item is NOT user-interacted
+		// 4. Previous item is NOT user-modified (don't collapse user notes)
+		if (analysisResults.items.length > 1 && !userModified) {
 			const lastItem = analysisResults.items[analysisResults.items.length - 2];
-			if (lastItem && !lastItem.userInteracted) {
+			if (lastItem && !lastItem.userInteracted && !lastItem.userModified) {
 				lastItem.expanded = false;
 			}
 		}
-	}, 300);
+	};
+	const collapseTimeout = setTimeout(collapseCallback, 300);
 	timeoutIds.add(collapseTimeout);
 
 	analysisResults.highlightedItemId = id;
@@ -156,6 +163,7 @@ export function setAnalysisItemFeedback(
 	options?: CursorOptions
 ) {
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			const item = analysisResults.items.find((i) => i.id === id);
 			if (item) {
@@ -163,7 +171,7 @@ export function setAnalysisItemFeedback(
 				item.feedbackText = feedbackText;
 				item.userInteracted = true;
 			}
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }

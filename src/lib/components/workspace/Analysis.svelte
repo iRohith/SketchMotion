@@ -10,6 +10,7 @@
 		addUserNote,
 		setAnalysisItemFeedback
 	} from '$lib/stores/analysis.svelte';
+	import { CANVAS_WIDTH, CANVAS_HEIGHT } from '$lib/utils/constants';
 	import {
 		ChevronDown,
 		Trash2,
@@ -49,10 +50,15 @@
 	});
 
 	$effect(() => {
-		if (analysisResults.highlightedItemId && scrollContainer && !isEditing) {
-			const element = document.getElementById(`item-${analysisResults.highlightedItemId}`);
-			if (element) {
-				element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		if (analysisResults.highlightedItemId && scrollContainer) {
+			const item = analysisResults.items.find((i) => i.id === analysisResults.highlightedItemId);
+			const shouldScroll = !isEditing || item?.userModified;
+
+			if (shouldScroll) {
+				const element = document.getElementById(`item-${analysisResults.highlightedItemId}`);
+				if (element) {
+					element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				}
 			}
 		}
 	});
@@ -149,18 +155,23 @@
 											class="relative block h-8 w-8 shrink-0 overflow-hidden rounded bg-black/50"
 										>
 											{#if item.bounds}
-												{@const w = item.bounds.maxX - item.bounds.minX}
-												{@const h = item.bounds.maxY - item.bounds.minY}
+												{@const padding = 20}
+												{@const minX = Math.max(0, item.bounds.minX - padding)}
+												{@const minY = Math.max(0, item.bounds.minY - padding)}
+												{@const maxX = Math.min(CANVAS_WIDTH, item.bounds.maxX + padding)}
+												{@const maxY = Math.min(CANVAS_HEIGHT, item.bounds.maxY + padding)}
+												{@const w = maxX - minX}
+												{@const h = maxY - minY}
 												{@const dim = Math.max(w, h, 1)}
-												<!-- Cropped Thumbnail -->
+												<!-- Cropped Thumbnail with padding -->
 												<div
 													class="absolute h-full w-full"
 													style="
-													background-image: url({item.imageUrl});
-													background-size: {(1920 / dim) * 32}px auto;
-													background-position: -{(item.bounds.minX / dim) * 32}px -{(item.bounds.minY / dim) * 32}px;
-													background-repeat: no-repeat;
-												"
+										background-image: url({item.imageUrl});
+										background-size: {(CANVAS_WIDTH / dim) * 32}px auto;
+										background-position: -{(minX / dim) * 32}px -{(minY / dim) * 32}px;
+										background-repeat: no-repeat;
+									"
 													role="img"
 													aria-label="Preview"
 													onmouseenter={(e) => {
@@ -353,8 +364,13 @@
 
 	{#if hoveredImage}
 		{#if hoveredImage.bounds}
-			{@const w = hoveredImage.bounds.maxX - hoveredImage.bounds.minX}
-			{@const h = hoveredImage.bounds.maxY - hoveredImage.bounds.minY}
+			{@const padding = 20}
+			{@const minX = Math.max(0, hoveredImage.bounds.minX - padding)}
+			{@const minY = Math.max(0, hoveredImage.bounds.minY - padding)}
+			{@const maxX = Math.min(CANVAS_WIDTH, hoveredImage.bounds.maxX + padding)}
+			{@const maxY = Math.min(CANVAS_HEIGHT, hoveredImage.bounds.maxY + padding)}
+			{@const w = maxX - minX}
+			{@const h = maxY - minY}
 			{@const dim = Math.max(w, h, 1)}
 			<div
 				class="pointer-events-none fixed z-100 overflow-hidden rounded-lg border border-white/20 bg-black/90 shadow-xl"
@@ -365,10 +381,8 @@
 					class="h-full w-full"
 					style="
 					background-image: url({hoveredImage.src});
-					background-size: {(1920 / dim) * 256}px auto;
-					background-position: -{(hoveredImage.bounds.minX / dim) * 256}px -{(hoveredImage.bounds.minY /
-						dim) *
-						256}px;
+					background-size: {(CANVAS_WIDTH / dim) * 256}px auto;
+					background-position: -{(minX / dim) * 256}px -{(minY / dim) * 256}px;
 					background-repeat: no-repeat;
 				"
 				></div>

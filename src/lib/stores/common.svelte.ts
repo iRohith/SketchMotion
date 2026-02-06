@@ -13,10 +13,11 @@ export function setPipelineState(
 ) {
 	if (state > pipelineState.finishedStep) return;
 	moveCursorToElement(elementId, {
+		...options,
 		onComplete: () => {
 			pipelineState.selectedStep = state;
-		},
-		...options
+			options?.onComplete?.();
+		}
 	});
 }
 
