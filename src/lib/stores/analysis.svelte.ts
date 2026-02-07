@@ -217,6 +217,15 @@ export function handleResultFeedback(feedback: 'yes' | 'no') {
 
 // --- Analysis Results State ---
 
+// History entry for analysis item
+interface AnalysisHistoryEntry {
+	title: string;
+	content: string;
+	imageUrl?: string;
+	contextImageUrl?: string;
+	timestamp: number;
+}
+
 export const analysisResults = $state({
 	items: [] as Array<{
 		id: string;
@@ -229,8 +238,16 @@ export const analysisResults = $state({
 		feedbackText?: string;
 		objectId?: string;
 		timestamp: number;
-		imageUrl?: string;
+		imageUrl?: string; // Intent image (bright/dim)
+		contextImageUrl?: string; // Context image (with colored outlines)
 		bounds?: { minX: number; minY: number; maxX: number; maxY: number };
+		// Loading state
+		status: 'loading' | 'success' | 'error';
+		errorMessage?: string;
+		clusterId?: string; // For retry functionality
+		// History navigation
+		history: AnalysisHistoryEntry[];
+		historyIndex: number; // -1 means current (latest), 0+ means viewing history
 	}>,
 	isProcessing: false,
 	highlightedItemId: null as string | null,
@@ -257,7 +274,9 @@ export function addAnalysisItem(
 	id: string = `analysis-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
 	objectId?: string,
 	imageUrl?: string,
-	bounds?: { minX: number; minY: number; maxX: number; maxY: number }
+	bounds?: { minX: number; minY: number; maxX: number; maxY: number },
+	status: 'loading' | 'success' | 'error' = 'success',
+	clusterId?: string
 ) {
 	analysisResults.items.push({
 		id,
@@ -271,7 +290,11 @@ export function addAnalysisItem(
 		objectId,
 		timestamp: Date.now(),
 		imageUrl,
-		bounds
+		bounds,
+		status,
+		clusterId,
+		history: [],
+		historyIndex: -1
 	});
 
 	const collapseCallback = () => {
@@ -304,6 +327,140 @@ export function addAnalysisItem(
 	}
 
 	return id;
+}
+
+// Add a loading placeholder item
+export function addLoadingItem(
+	clusterId: string,
+	bounds?: { minX: number; minY: number; maxX: number; maxY: number }
+): string {
+	const id = `analysis-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+	analysisResults.items.push({
+		id,
+		title: 'Analyzing...',
+		content: '',
+		expanded: true,
+		userModified: false,
+		userInteracted: false,
+		feedback: null,
+		feedbackText: '',
+		objectId: undefined,
+		timestamp: Date.now(),
+		imageUrl: undefined,
+		bounds,
+		status: 'loading',
+		clusterId,
+		history: [],
+		historyIndex: -1
+	});
+	return id;
+}
+
+// Set item to error state with retry option
+export function setItemError(id: string, errorMessage: string) {
+	const item = analysisResults.items.find((i) => i.id === id);
+	if (item) {
+		item.status = 'error';
+		item.errorMessage = errorMessage;
+		item.title = 'Analysis Failed';
+		item.content = errorMessage;
+	}
+}
+
+// Set item to success with analysis result
+export function setItemSuccess(
+	id: string,
+	title: string,
+	content: string,
+	objectId?: string,
+	imageUrl?: string,
+	bounds?: { minX: number; minY: number; maxX: number; maxY: number },
+	contextImageUrl?: string
+) {
+	const item = analysisResults.items.find((i) => i.id === id);
+	if (item) {
+		// Push current state to history before updating (if not loading)
+		if (item.status === 'success' && item.title) {
+			item.history.push({
+				title: item.title,
+				content: item.content,
+				imageUrl: item.imageUrl,
+				contextImageUrl: item.contextImageUrl,
+				timestamp: item.timestamp
+			});
+		}
+		// Reset to viewing latest
+		item.historyIndex = -1;
+		// Update current state
+		item.status = 'success';
+		item.title = title;
+		item.content = content;
+		item.errorMessage = undefined;
+		if (objectId) item.objectId = objectId;
+		if (imageUrl) item.imageUrl = imageUrl;
+		if (contextImageUrl) item.contextImageUrl = contextImageUrl;
+		if (bounds) item.bounds = bounds;
+		item.timestamp = Date.now();
+	}
+}
+
+// Navigate to previous history entry
+export function navigateHistoryPrev(id: string) {
+	const item = analysisResults.items.find((i) => i.id === id);
+	if (!item || item.history.length === 0) return;
+
+	// If currently at latest (-1), go to last history entry
+	if (item.historyIndex === -1) {
+		item.historyIndex = item.history.length - 1;
+	} else if (item.historyIndex > 0) {
+		item.historyIndex--;
+	}
+}
+
+// Navigate to next history entry (or back to current)
+export function navigateHistoryNext(id: string) {
+	const item = analysisResults.items.find((i) => i.id === id);
+	if (!item) return;
+
+	// If at or past last history entry, go back to current (-1)
+	if (item.historyIndex >= item.history.length - 1 || item.historyIndex === -1) {
+		item.historyIndex = -1;
+	} else {
+		item.historyIndex++;
+	}
+}
+
+// Get the currently displayed state for an item (respects history navigation)
+export function getDisplayedItem(id: string) {
+	const item = analysisResults.items.find((i) => i.id === id);
+	if (!item) return null;
+
+	// If viewing history
+	if (item.historyIndex >= 0 && item.historyIndex < item.history.length) {
+		const historyEntry = item.history[item.historyIndex];
+		return {
+			title: historyEntry.title,
+			content: historyEntry.content,
+			imageUrl: historyEntry.imageUrl,
+			contextImageUrl: historyEntry.contextImageUrl,
+			timestamp: historyEntry.timestamp,
+			isHistorical: true,
+			currentIndex: item.historyIndex,
+			totalVersions: item.history.length + 1 // +1 for current
+		};
+	}
+
+	// Viewing current
+	return {
+		title: item.title,
+		content: item.content,
+		imageUrl: item.imageUrl,
+		contextImageUrl: item.contextImageUrl,
+		timestamp: item.timestamp,
+		isHistorical: false,
+		currentIndex: item.history.length, // Current is "last"
+		totalVersions: item.history.length + 1
+	};
 }
 
 export function deleteAnalysisItem(id: string) {
@@ -372,6 +529,48 @@ export function cleanupAnalysisTimers() {
 	timeoutIds.clear();
 }
 
+// Feedback event for AutoAnalysis to handle
+export type FeedbackEvent = {
+	itemId: string;
+	objectId?: string;
+	feedback: 'yes' | 'no' | 'other';
+	text?: string;
+};
+
+// Callback for handling feedback events (registered by AutoAnalysis)
+let feedbackCallback: ((event: FeedbackEvent) => void) | null = null;
+
+export function registerFeedbackHandler(callback: (event: FeedbackEvent) => void) {
+	feedbackCallback = callback;
+}
+
+export function unregisterFeedbackHandler() {
+	feedbackCallback = null;
+}
+
+// Retry callback for failed analysis items
+let retryCallback: ((itemId: string, clusterId: string) => void) | null = null;
+
+export function registerRetryHandler(callback: (itemId: string, clusterId: string) => void) {
+	retryCallback = callback;
+}
+
+export function unregisterRetryHandler() {
+	retryCallback = null;
+}
+
+export function requestItemRetry(itemId: string) {
+	const item = analysisResults.items.find((i) => i.id === itemId);
+	if (item && item.clusterId && retryCallback) {
+		// Set back to loading state
+		item.status = 'loading';
+		item.title = 'Retrying...';
+		item.content = '';
+		item.errorMessage = undefined;
+		retryCallback(itemId, item.clusterId);
+	}
+}
+
 export function setAnalysisItemFeedback(
 	id: string,
 	feedback: 'yes' | 'no' | 'other',
@@ -387,6 +586,18 @@ export function setAnalysisItemFeedback(
 				item.feedback = feedback;
 				item.feedbackText = feedbackText;
 				item.userInteracted = true;
+				// Collapse item after feedback
+				item.expanded = false;
+
+				// Notify AutoAnalysis to handle the feedback (revert groups, retry, etc.)
+				if (feedbackCallback) {
+					feedbackCallback({
+						itemId: id,
+						objectId: item.objectId,
+						feedback,
+						text: feedbackText
+					});
+				}
 			}
 			options?.onComplete?.();
 		}

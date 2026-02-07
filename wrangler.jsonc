@@ -10,6 +10,12 @@
 	},
 	"workers_dev": true,
 	"preview_urls": true,
+	"kv_namespaces": [
+		{
+			"binding": "ANALYSIS_SESSIONS",
+			"id": "116100b0c4a147cbaab3ae02814c28e0"
+		}
+	],
 	"ratelimits": [
 		{
 			"name": "ANALYSIS_LIMITER",

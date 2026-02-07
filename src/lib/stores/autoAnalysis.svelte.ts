@@ -16,6 +16,11 @@ export type TrackedCluster = {
 	bounds: BoundingBox;
 	lastUpdate: number;
 	skipped: boolean;
+	// Session tracking for iterative feedback
+	sessionId?: string;
+	preAIMergeStrokeIds?: Set<string>; // Original state before AI merge
+	retryCount: number;
+	lastTitle?: string; // For sending with feedback
 };
 
 // --- State ---

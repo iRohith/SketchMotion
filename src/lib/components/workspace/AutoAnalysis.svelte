@@ -10,8 +10,6 @@
 	} from '$lib/stores/canvas.svelte';
 	import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 	import {
-		addAnalysisItem,
-		updateAnalysisItem,
 		analysisResults,
 		analysisHover,
 		showAskHover,
@@ -22,7 +20,15 @@
 		pauseHoverTimeout,
 		resumeHoverTimeout,
 		registerAnalysisTrigger,
-		unregisterAnalysisTrigger
+		unregisterAnalysisTrigger,
+		registerFeedbackHandler,
+		unregisterFeedbackHandler,
+		addLoadingItem,
+		setItemError,
+		setItemSuccess,
+		registerRetryHandler,
+		unregisterRetryHandler,
+		type FeedbackEvent
 	} from '$lib/stores/analysis.svelte';
 	import {
 		autoAnalysisState,
@@ -36,10 +42,12 @@
 	import { CircleCheck, CircleX } from '@lucide/svelte';
 	import { CANVAS_HEIGHT, CANVAS_WIDTH } from '$lib/utils/constants';
 	import { demoCursor } from '$lib/stores/demoCursor.svelte';
+	import { toastState } from '$lib/stores/toast.svelte';
 
 	// --- Configuration ---
 	const IDLE_THRESHOLD = 1500;
 	const SEND_DELAY = 1000;
+	const MAX_RETRIES = 3;
 
 	// --- State (from store) ---
 	// Note: analysisQueue, isSending, lastSnapshotTime, trackedClusters now come from autoAnalysis store
@@ -56,13 +64,169 @@
 		}
 	});
 
-	// Register manual trigger for demo mode
+	// Register manual trigger for demo mode and feedback handler
 	onMount(() => {
 		registerAnalysisTrigger(runAccumulation);
-		return () => unregisterAnalysisTrigger();
+		registerFeedbackHandler(handleFeedbackEvent);
+		registerRetryHandler(handleRetry);
+		return () => {
+			unregisterAnalysisTrigger();
+			unregisterFeedbackHandler();
+			unregisterRetryHandler();
+		};
 	});
 
+	// Handle retry requests from the Analysis UI
+	function handleRetry(itemId: string, clusterId: string) {
+		console.log('[AutoAnalysis] Retry requested for:', clusterId);
+		const tracker = trackedClusters.get(clusterId);
+		if (!tracker) {
+			console.warn('[AutoAnalysis] No tracker found for retry:', clusterId);
+			return;
+		}
+
+		// Re-queue the analysis
+		const queueItem: QueueItem = {
+			id: `queue-${Date.now()}`,
+			clusterId,
+			strokeIds: tracker.strokeIds,
+			timestamp: Date.now(),
+			status: 'pending' as const
+		};
+		autoAnalysisState.analysisQueue.push(queueItem);
+		autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
+
+		// Process the queue item
+		processQueueItem(queueItem);
+	}
+
 	// --- Effects ---
+
+	// Handle feedback events from analysis store
+	async function handleFeedbackEvent(event: FeedbackEvent) {
+		console.log('[AutoAnalysis] Feedback received:', event);
+
+		// Find the tracker for this analysis item
+		let tracker: ReturnType<typeof trackedClusters.get> | undefined;
+		let clusterId: string | undefined;
+
+		for (const [cId, t] of trackedClusters.entries()) {
+			if (t.analysisItemId === event.itemId) {
+				tracker = t;
+				clusterId = cId;
+				break;
+			}
+		}
+
+		if (!tracker || !clusterId) {
+			console.warn('[AutoAnalysis] No tracker found for feedback item:', event.itemId);
+			return;
+		}
+
+		if (event.feedback === 'yes' || event.feedback === 'other') {
+			// User accepted - keep the AI-merged groups
+			// Clear preAIMergeStrokeIds since merge is confirmed
+			tracker.preAIMergeStrokeIds = undefined;
+			console.log('[AutoAnalysis] User accepted analysis. Groups kept.');
+		} else if (event.feedback === 'no') {
+			// User rejected - revert to pre-AI groups
+			if (tracker.preAIMergeStrokeIds) {
+				tracker.strokeIds = tracker.preAIMergeStrokeIds;
+				console.log('[AutoAnalysis] Reverted to pre-AI groups');
+			}
+
+			// Check if we can retry
+			if (tracker.retryCount < MAX_RETRIES) {
+				console.log(`[AutoAnalysis] Retrying analysis (${tracker.retryCount + 1}/${MAX_RETRIES})`);
+				await retryAnalysis(clusterId, tracker, event);
+			} else {
+				console.log('[AutoAnalysis] Max retries reached. Giving up on this group.');
+				toastState.info('Max retries reached. You can add custom feedback.');
+			}
+		}
+	}
+
+	// Retry analysis with feedback context
+	async function retryAnalysis(
+		clusterId: string,
+		tracker: NonNullable<ReturnType<typeof trackedClusters.get>>,
+		feedbackEvent: FeedbackEvent
+	) {
+		try {
+			const { intentImage, contextImage, colorMapping } = await captureCanvasState(clusterId);
+
+			const response = await fetch('/api/analyze-group', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'x-client-id': demoCursor.visible ? 'DEMO_SESSION_123' : clientId
+				},
+				body: JSON.stringify({
+					intentImage,
+					contextImage,
+					groupId: clusterId,
+					existingGroups: colorMapping,
+					sessionId: tracker.sessionId,
+					feedback: feedbackEvent.feedback,
+					feedbackText: feedbackEvent.text,
+					previousTitle: tracker.lastTitle,
+					isRetry: true,
+					timestamp: Date.now()
+				})
+			});
+
+			if (!response.ok) {
+				throw new Error(response.statusText);
+			}
+
+			const data = (await response.json()) as {
+				success: boolean;
+				title?: string;
+				content?: string;
+				objectId?: string;
+				sessionId?: string;
+				retryCount?: number;
+				canRetry?: boolean;
+				error?: string;
+			};
+
+			// Update tracker with session data
+			if (data.sessionId) tracker.sessionId = data.sessionId;
+			if (data.retryCount !== undefined) tracker.retryCount = data.retryCount;
+
+			if (data.success && data.title && data.content) {
+				tracker.lastTitle = data.title;
+
+				// Update the existing analysis item
+				if (tracker.analysisItemId) {
+					setItemSuccess(
+						tracker.analysisItemId,
+						data.title,
+						data.content,
+						data.objectId,
+						intentImage,
+						tracker.bounds,
+						contextImage
+					);
+					console.log('[AutoAnalysis] Retry success:', data.title);
+				}
+
+				// Note: Don't show popup on retry - user already gave feedback
+				// The item is updated in the sidebar, user can expand to see new result
+			} else if (data.error) {
+				console.error('[AutoAnalysis] Retry returned error:', data.error);
+				if (tracker.analysisItemId) {
+					setItemError(tracker.analysisItemId, data.error);
+				}
+			}
+		} catch (e) {
+			const errorMsg = e instanceof Error ? e.message : 'Unknown error';
+			console.error('[AutoAnalysis] Retry exception:', errorMsg);
+			if (tracker.analysisItemId) {
+				setItemError(tracker.analysisItemId, 'Retry failed: ' + errorMsg);
+			}
+		}
+	}
 
 	// Trigger accumulation when groups change (after idle)
 	// In demo mode, skip the idle debounce
@@ -233,7 +397,8 @@
 						maxY: bounds.maxY
 					},
 					lastUpdate: Date.now(),
-					skipped: false
+					skipped: false,
+					retryCount: 0
 				});
 
 				if (hasNewContent) {
@@ -424,10 +589,24 @@
 		try {
 			await new Promise((r) => setTimeout(r, SEND_DELAY));
 
-			const ids = Array.from(tracker.strokeIds).sort();
-			const image = await captureCanvasState(ids);
+			const { intentImage, contextImage, colorMapping } = await captureCanvasState(item.clusterId);
 
-			const existingAnalysisId = tracker.analysisItemId;
+			// Create loading item immediately (or use existing one)
+			let analysisId = tracker.analysisItemId;
+			if (!analysisId) {
+				analysisId = addLoadingItem(item.clusterId, tracker.bounds);
+				tracker.analysisItemId = analysisId;
+			}
+
+			// Save current stroke IDs before any AI-suggested merge
+			if (!tracker.preAIMergeStrokeIds) {
+				tracker.preAIMergeStrokeIds = new Set(tracker.strokeIds);
+			}
+
+			// Log: Sending request
+			console.log(
+				`[AutoAnalysis] Sending: cluster=${item.clusterId}, groups=${colorMapping.length}, intentSize=${Math.round(intentImage.length / 1024)}KB`
+			);
 
 			const response = await fetch('/api/analyze-group', {
 				method: 'POST',
@@ -436,14 +615,18 @@
 					'x-client-id': demoCursor.visible ? 'DEMO_SESSION_123' : clientId
 				},
 				body: JSON.stringify({
-					image,
+					intentImage,
+					contextImage,
 					groupId: item.clusterId,
+					existingGroups: colorMapping,
+					sessionId: tracker.sessionId,
 					timestamp: item.timestamp
 				})
 			});
 
 			if (response.status === 429) {
 				console.warn('[AutoAnalysis] Throttled. Waiting 5s before retry.');
+				setItemError(analysisId, 'Rate limited. Retrying...');
 				item.status = 'pending';
 				autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
 				await new Promise((r) => setTimeout(r, 5000));
@@ -451,47 +634,98 @@
 				return;
 			}
 
-			if (!response.ok) throw new Error(response.statusText);
+			if (!response.ok) {
+				const errorData = (await response.json().catch(() => ({}))) as { error?: string };
+				const errorMsg = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
+				console.error(`[AutoAnalysis] Response error: ${errorMsg}`);
+				setItemError(analysisId, errorMsg);
+				autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+					(i) => i.id !== item.id
+				);
+				return;
+			}
+
+			console.log('[AutoAnalysis] Response received, parsing...');
 
 			const data = (await response.json()) as {
 				success: boolean;
 				title?: string;
 				content?: string;
 				objectId?: string;
+				sessionId?: string;
+				retryCount?: number;
+				canRetry?: boolean;
+				suggestedGroups?: {
+					name: string;
+					description: string;
+					groupIds: string[];
+					confidence: number;
+				}[];
 			};
 
-			if (data.success && data.title && data.content) {
-				let newAnalysisId: string;
+			// Save session data for future requests
+			if (data.sessionId) {
+				tracker.sessionId = data.sessionId;
+			}
+			if (data.retryCount !== undefined) {
+				tracker.retryCount = data.retryCount;
+			}
 
-				// If this cluster already has an analysis item, update it.
-				// (findBestMatch already ensures we don't merge into items with feedback)
-				if (existingAnalysisId) {
-					updateAnalysisItem(
-						existingAnalysisId,
-						data.title,
-						data.content,
-						data.objectId,
-						image,
-						tracker.bounds
-					);
-					newAnalysisId = existingAnalysisId;
-					console.log('[AutoAnalysis] Updated item:', existingAnalysisId);
-				} else {
-					newAnalysisId = addAnalysisItem(
-						data.title,
-						data.content,
-						false,
-						undefined,
-						data.objectId,
-						image,
-						tracker.bounds
-					);
-					tracker.analysisItemId = newAnalysisId;
-					console.log('[AutoAnalysis] Created item:', newAnalysisId);
+			if (data.success && data.title && data.content) {
+				// Save title for potential feedback
+				tracker.lastTitle = data.title;
+
+				// Handle AI-suggested group merges first (so we can update bounds)
+				if (data.suggestedGroups && data.suggestedGroups.length > 0) {
+					console.log('[AutoAnalysis] AI suggested groups:', data.suggestedGroups);
+					for (const suggestion of data.suggestedGroups) {
+						if (suggestion.confidence >= 0.8) {
+							console.log(`[AutoAnalysis] High-confidence group suggestion: "${suggestion.name}"`);
+							// Merge the suggested groups' strokes
+							const mergedStrokeIds = new Set<string>();
+							for (const gId of suggestion.groupIds) {
+								const existingGroup = groups.get(gId);
+								if (existingGroup) {
+									existingGroup.forEach((id) => mergedStrokeIds.add(id));
+								}
+							}
+							// Update the tracker to include all merged strokes
+							if (mergedStrokeIds.size > 0) {
+								tracker.strokeIds = mergedStrokeIds;
+								console.log(
+									`[AutoAnalysis] Merged ${suggestion.groupIds.length} groups into tracker`
+								);
+							}
+						}
+					}
 				}
 
+				// Recalculate bounds based on the (potentially merged) stroke IDs
+				const mergedStrokes = Array.from(tracker.strokeIds)
+					.map((id) => strokes.get(id))
+					.filter((s): s is Stroke => s !== undefined);
+				const updatedBounds = calculateBoundingBox(mergedStrokes);
+				if (updatedBounds) {
+					tracker.bounds = updatedBounds;
+				}
+
+				// Update the analysis item to success with new bounds
+				setItemSuccess(
+					analysisId,
+					data.title,
+					data.content,
+					data.objectId,
+					intentImage,
+					tracker.bounds,
+					contextImage
+				);
+				console.log('[AutoAnalysis] Updated item to success:', analysisId);
+
 				// Show result hover with Yes/No feedback
-				showResultHover(item.clusterId, newAnalysisId, tracker.bounds, data.title, data.content);
+				showResultHover(item.clusterId, analysisId, tracker.bounds, data.title, data.content);
+			} else {
+				// API returned success:false or missing data
+				setItemError(analysisId, 'Analysis returned no results');
 			}
 
 			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
@@ -499,6 +733,28 @@
 			);
 		} catch (e) {
 			console.error('[AutoAnalysis] Error:', e);
+
+			// Update item to error state
+			let errorMessage = 'Analysis failed';
+			if (e instanceof Error) {
+				if (e.message.includes('quota')) {
+					errorMessage = 'API quota exceeded. Please try again later.';
+				} else if (e.message.includes('rate limit')) {
+					errorMessage = 'Rate limit exceeded. Please wait 30 seconds.';
+				} else if (e.message.includes('API key')) {
+					errorMessage = 'Invalid API key. Please check configuration.';
+				} else if (e.message.includes('Failed to fetch')) {
+					errorMessage = 'Network error. Please check your connection.';
+				}
+			}
+
+			// If we created a loading item, update it to error
+			if (tracker.analysisItemId) {
+				setItemError(tracker.analysisItemId, errorMessage);
+			} else {
+				toastState.error(errorMessage);
+			}
+
 			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
 				(i) => i.id !== item.id
 			);
@@ -506,59 +762,186 @@
 			autoAnalysisState.isSending = false;
 		}
 	}
+	// Capture canvas with two images for two-pass analysis:
+	// 1. Intent Image: Pure drawing with target group highlighted, others dimmed
+	// 2. Context Image: All strokes with colored outlines for group relationships
+	interface CaptureResult {
+		intentImage: string; // Pure drawing, target highlighted
+		contextImage: string; // With group outlines
+		colorMapping: { color: string; groupId: string; strokeIds: string[] }[];
+	}
 
-	async function captureCanvasState(activeStrokeIds: string[]): Promise<string> {
+	async function captureCanvasState(targetClusterId?: string): Promise<CaptureResult> {
 		const canvas = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
-		const ctx = canvas.getContext('2d');
-		if (!ctx) throw new Error('No Context');
+		const ctx = canvas.getContext('2d')!;
 
-		ctx.fillStyle = '#1e1e1e';
-		ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-		ctx.lineCap = 'round';
-		ctx.lineJoin = 'round';
+		// Build color mapping for groups
+		const groupColors = generateGroupColors(groups.size);
+		const colorMapping: { color: string; groupId: string; strokeIds: string[] }[] = [];
+		const strokeToColor = new Map<string, string>();
+		const targetStrokeIds = new Set<string>();
 
-		const activeSet = new Set(activeStrokeIds);
+		console.log(
+			'[CaptureCanvasState] targetClusterId:',
+			targetClusterId,
+			'groups.size:',
+			groups.size
+		);
 
-		for (const stroke of strokes.values()) {
-			const isActive = activeSet.has(stroke.id);
-			ctx.lineWidth = stroke.size;
-			if (isActive) {
-				ctx.strokeStyle = stroke.color;
-				ctx.globalAlpha = 1.0;
-			} else {
-				ctx.strokeStyle = '#555555';
-				ctx.globalAlpha = 0.2;
+		let colorIndex = 0;
+		for (const [groupId, groupStrokeIds] of groups.entries()) {
+			const color = groupColors[colorIndex % groupColors.length];
+			colorMapping.push({
+				color,
+				groupId,
+				strokeIds: Array.from(groupStrokeIds)
+			});
+			for (const strokeId of groupStrokeIds) {
+				strokeToColor.set(strokeId, color);
+				if (groupId === targetClusterId) {
+					targetStrokeIds.add(strokeId);
+				}
 			}
+			colorIndex++;
+		}
 
+		console.log(
+			'[CaptureCanvasState] targetStrokeIds.size:',
+			targetStrokeIds.size,
+			'total strokes:',
+			strokes.size
+		);
+
+		// Helper function to draw strokes
+		const drawStrokes = (
+			context: OffscreenCanvasRenderingContext2D,
+			strokeList: Iterable<Stroke>,
+			options: {
+				opacity?: number;
+				useOutline?: boolean;
+				outlineColor?: (id: string) => string | undefined;
+			}
+		) => {
+			for (const stroke of strokeList) {
+				const alpha = options.opacity ?? 1.0;
+				context.globalAlpha = alpha;
+
+				// Draw outline if requested
+				if (options.useOutline) {
+					const outlineColor = options.outlineColor?.(stroke.id);
+					if (outlineColor) {
+						context.strokeStyle = outlineColor;
+						context.lineWidth = stroke.size + 8;
+						drawStrokePath(context, stroke);
+					}
+				}
+
+				// Draw actual stroke
+				context.globalAlpha = alpha;
+				context.strokeStyle = stroke.color;
+				context.lineWidth = stroke.size;
+				drawStrokePath(context, stroke);
+			}
+		};
+
+		const drawStrokePath = (context: OffscreenCanvasRenderingContext2D, stroke: Stroke) => {
 			const pts = stroke.points;
 			if (pts.length < 2) {
 				if (pts.length === 1) {
-					ctx.beginPath();
-					ctx.arc(pts[0].x, pts[0].y, stroke.size / 2, 0, Math.PI * 2);
-					ctx.fillStyle = ctx.strokeStyle;
-					ctx.fill();
+					context.beginPath();
+					context.arc(pts[0].x, pts[0].y, stroke.size / 2, 0, Math.PI * 2);
+					context.fillStyle = context.strokeStyle as string;
+					context.fill();
 				}
-				continue;
+				return;
 			}
-			ctx.beginPath();
-			ctx.moveTo(pts[0].x, pts[0].y);
+			context.beginPath();
+			context.moveTo(pts[0].x, pts[0].y);
 			for (let i = 1; i < pts.length - 1; i++) {
 				const curr = pts[i];
 				const next = pts[i + 1];
 				const midX = (curr.x + next.x) / 2;
 				const midY = (curr.y + next.y) / 2;
-				ctx.quadraticCurveTo(curr.x, curr.y, midX, midY);
+				context.quadraticCurveTo(curr.x, curr.y, midX, midY);
 			}
-			ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-			ctx.stroke();
+			context.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+			context.stroke();
+		};
+
+		// === INTENT IMAGE ===
+		// Pure drawing with target strokes highlighted, others dimmed
+		ctx.fillStyle = '#1e1e1e';
+		ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+		ctx.lineCap = 'round';
+		ctx.lineJoin = 'round';
+
+		// Draw non-target strokes dimmed
+		const nonTargetStrokes = Array.from(strokes.values()).filter((s) => !targetStrokeIds.has(s.id));
+		const targetStrokes = Array.from(strokes.values()).filter((s) => targetStrokeIds.has(s.id));
+
+		// If no target specified, show all at full opacity
+		if (targetStrokeIds.size === 0) {
+			drawStrokes(ctx, strokes.values(), { opacity: 1.0 });
+		} else {
+			// Dimmed background strokes
+			drawStrokes(ctx, nonTargetStrokes, { opacity: 0.25 });
+			// Target strokes at full opacity
+			drawStrokes(ctx, targetStrokes, { opacity: 1.0 });
 		}
-		const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+
+		const intentBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+		const intentImage = await blobToDataURL(intentBlob);
+
+		// === CONTEXT IMAGE ===
+		// All strokes with colored outlines for group relationships
+		ctx.fillStyle = '#1e1e1e';
+		ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+		// First pass: Draw colored outlines
+		ctx.globalAlpha = 0.7;
+		for (const stroke of strokes.values()) {
+			const outlineColor = strokeToColor.get(stroke.id);
+			if (!outlineColor) continue;
+
+			ctx.strokeStyle = outlineColor;
+			ctx.lineWidth = stroke.size + 8;
+			drawStrokePath(ctx, stroke);
+		}
+
+		// Second pass: Draw actual strokes on top
+		ctx.globalAlpha = 1.0;
+		for (const stroke of strokes.values()) {
+			ctx.strokeStyle = stroke.color;
+			ctx.lineWidth = stroke.size;
+			drawStrokePath(ctx, stroke);
+		}
+
+		const contextBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+		const contextImage = await blobToDataURL(contextBlob);
+
+		return { intentImage, contextImage, colorMapping };
+	}
+
+	async function blobToDataURL(blob: Blob): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const reader = new FileReader();
 			reader.onloadend = () => resolve(reader.result as string);
 			reader.onerror = reject;
 			reader.readAsDataURL(blob);
 		});
+	}
+
+	// Generate distinct colors for group outlines
+	function generateGroupColors(count: number): string[] {
+		const colors: string[] = [];
+		const hueStep = 360 / Math.max(count, 1);
+
+		for (let i = 0; i < count; i++) {
+			const hue = (i * hueStep) % 360;
+			colors.push(`hsl(${hue}, 80%, 60%)`);
+		}
+
+		return colors;
 	}
 </script>
 

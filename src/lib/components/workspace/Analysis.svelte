@@ -8,17 +8,25 @@
 		toggleAnalysisItem,
 		markAnalysisItemInteracted,
 		addUserNote,
-		setAnalysisItemFeedback
+		setAnalysisItemFeedback,
+		requestItemRetry,
+		navigateHistoryPrev,
+		navigateHistoryNext,
+		getDisplayedItem
 	} from '$lib/stores/analysis.svelte';
 	import { CANVAS_WIDTH, CANVAS_HEIGHT } from '$lib/utils/constants';
 	import {
 		ChevronDown,
+		ChevronLeft,
+		ChevronRight,
 		Trash2,
 		SendHorizontal,
 		CircleCheck,
 		CircleX,
 		Pencil,
-		Check
+		Check,
+		RefreshCcw,
+		Loader2
 	} from '@lucide/svelte';
 
 	let scrollContainer = $state<HTMLDivElement>();
@@ -151,33 +159,60 @@
 							>
 								<div class="flex items-center gap-4">
 									{#if item.imageUrl}
-										<div
-											class="relative block h-8 w-8 shrink-0 overflow-hidden rounded bg-black/50"
-										>
-											{#if item.bounds}
-												{@const padding = 20}
-												{@const minX = Math.max(0, item.bounds.minX - padding)}
-												{@const minY = Math.max(0, item.bounds.minY - padding)}
-												{@const maxX = Math.min(CANVAS_WIDTH, item.bounds.maxX + padding)}
-												{@const maxY = Math.min(CANVAS_HEIGHT, item.bounds.maxY + padding)}
-												{@const w = maxX - minX}
-												{@const h = maxY - minY}
-												{@const dim = Math.max(w, h, 1)}
-												<!-- Cropped Thumbnail with padding -->
+										{@const padding = 20}
+										{@const minX = item.bounds ? Math.max(0, item.bounds.minX - padding) : 0}
+										{@const minY = item.bounds ? Math.max(0, item.bounds.minY - padding) : 0}
+										{@const maxX = item.bounds
+											? Math.min(CANVAS_WIDTH, item.bounds.maxX + padding)
+											: CANVAS_WIDTH}
+										{@const maxY = item.bounds
+											? Math.min(CANVAS_HEIGHT, item.bounds.maxY + padding)
+											: CANVAS_HEIGHT}
+										{@const w = maxX - minX}
+										{@const h = maxY - minY}
+										{@const dim = Math.max(w, h, 1)}
+										<!-- Two preview images side by side -->
+										<div class="flex shrink-0 gap-0.5">
+											<!-- Intent Image (bright/dim) -->
+											<div
+												class="relative block h-8 w-8 overflow-hidden rounded-l bg-black/50"
+												role="img"
+												aria-label="Intent Preview"
+												title="Intent (bright = target)"
+												style="
+													background-image: url({item.imageUrl});
+													background-size: {(CANVAS_WIDTH / dim) * 32}px auto;
+													background-position: -{(minX / dim) * 32}px -{(minY / dim) * 32}px;
+													background-repeat: no-repeat;
+												"
+												onmouseenter={(e) => {
+													const rect = (e.target as Element).getBoundingClientRect();
+													hoveredImage = {
+														src: item.imageUrl!,
+														x: rect.right + 10,
+														y: rect.top,
+														bounds: item.bounds
+													};
+												}}
+												onmouseleave={() => (hoveredImage = null)}
+											></div>
+											<!-- Context Image (colored outlines) -->
+											{#if item.contextImageUrl}
 												<div
-													class="absolute h-full w-full"
-													style="
-										background-image: url({item.imageUrl});
-										background-size: {(CANVAS_WIDTH / dim) * 32}px auto;
-										background-position: -{(minX / dim) * 32}px -{(minY / dim) * 32}px;
-										background-repeat: no-repeat;
-									"
+													class="relative block h-8 w-8 overflow-hidden rounded-r bg-black/50"
 													role="img"
-													aria-label="Preview"
+													aria-label="Context Preview"
+													title="Context (colored outlines)"
+													style="
+														background-image: url({item.contextImageUrl});
+														background-size: {(CANVAS_WIDTH / dim) * 32}px auto;
+														background-position: -{(minX / dim) * 32}px -{(minY / dim) * 32}px;
+														background-repeat: no-repeat;
+													"
 													onmouseenter={(e) => {
 														const rect = (e.target as Element).getBoundingClientRect();
 														hoveredImage = {
-															src: item.imageUrl!,
+															src: item.contextImageUrl!,
 															x: rect.right + 10,
 															y: rect.top,
 															bounds: item.bounds
@@ -185,26 +220,33 @@
 													}}
 													onmouseleave={() => (hoveredImage = null)}
 												></div>
-											{:else}
-												<img
-													src={item.imageUrl}
-													alt="Preview"
-													class="h-full w-full object-cover opacity-80 transition-opacity hover:opacity-100"
-													onmouseenter={(e) => {
-														const rect = (e.target as Element).getBoundingClientRect();
-														hoveredImage = {
-															src: item.imageUrl!,
-															x: rect.right + 10,
-															y: rect.top
-														};
-													}}
-													onmouseleave={() => (hoveredImage = null)}
-												/>
 											{/if}
 										</div>
 									{/if}
 									<span class="text-sm font-medium text-white/90">{item.title}</span>
-									{#if item.feedback === 'yes'}
+									{#if item.status === 'loading'}
+										<Loader2 class="h-4 w-4 animate-spin text-yellow-400" />
+									{:else if item.status === 'error'}
+										<span
+											role="button"
+											tabindex="0"
+											onclick={(e) => {
+												e.stopPropagation();
+												requestItemRetry(item.id);
+											}}
+											onkeydown={(e) => {
+												if (e.key === 'Enter' || e.key === ' ') {
+													e.stopPropagation();
+													requestItemRetry(item.id);
+												}
+											}}
+											class="flex cursor-pointer items-center gap-1 rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/30"
+											aria-label="Retry analysis"
+										>
+											<RefreshCcw class="h-3 w-3" />
+											<span>Retry</span>
+										</span>
+									{:else if item.feedback === 'yes'}
 										<CircleCheck class="h-4 w-4 text-green-400" />
 									{:else if item.feedback === 'no'}
 										<CircleX class="h-4 w-4 text-red-400" />
@@ -227,12 +269,44 @@
 
 						<!-- Item content (when expanded) -->
 						{#if item.expanded}
+							{@const displayed = getDisplayedItem(item.id)}
 							<div
 								transition:slide|local={{ duration: 200 }}
 								class="border-t border-white/5 bg-black/20 p-3"
 							>
+								<!-- History navigation bar -->
+								{#if item.history.length > 0 && displayed}
+									<div class="mb-2 flex items-center justify-between rounded bg-white/5 px-2 py-1">
+										<button
+											onclick={() => navigateHistoryPrev(item.id)}
+											disabled={displayed.currentIndex === 0}
+											class="rounded p-0.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+											aria-label="Previous version"
+										>
+											<ChevronLeft class="h-4 w-4" />
+										</button>
+										<span class="text-[10px] text-white/50">
+											{#if displayed.isHistorical}
+												<span class="text-yellow-400">v{displayed.currentIndex + 1}</span>
+											{:else}
+												<span class="text-green-400">current</span>
+											{/if}
+											<span class="mx-1">/</span>
+											<span>{displayed.totalVersions}</span>
+										</span>
+										<button
+											onclick={() => navigateHistoryNext(item.id)}
+											disabled={!displayed.isHistorical}
+											class="rounded p-0.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+											aria-label="Next version"
+										>
+											<ChevronRight class="h-4 w-4" />
+										</button>
+									</div>
+								{/if}
+
 								<p class="mb-3 text-xs leading-relaxed text-white/70">
-									{item.content}
+									{displayed?.content ?? item.content}
 								</p>
 
 								<!-- Feedback section -->

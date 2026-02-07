@@ -5,6 +5,8 @@ declare global {
 		interface Platform {
 			env: {
 				ANALYSIS_LIMITER: RateLimit;
+				ANALYSIS_SESSIONS: KVNamespace;
+				GOOGLE_API_KEY: string;
 			} & Env;
 			ctx: ExecutionContext;
 			caches: CacheStorage;

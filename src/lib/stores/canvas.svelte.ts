@@ -3,6 +3,7 @@ import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
 import { canvasToolbarState } from './canvasToolbar.svelte';
 import { computeGroups, type GroupingSettings } from '$lib/utils/grouping';
 import { pushStrokeHistory, undoStrokeHistory, redoStrokeHistory } from './history.svelte';
+import { resetSessionState } from './persistence';
 
 export const IDENTITY: Transform = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
@@ -13,7 +14,7 @@ export const renderPendingStore = $state({ renderPending: false });
 export const groupState = $state({ version: 0 });
 
 export const groupingSettings = $state<GroupingSettings>({
-	groupingThreshold: 0.5,
+	groupingThreshold: 0.3,
 	idleTime: 1.5
 });
 
@@ -96,6 +97,7 @@ export function deleteAllStrokes(elementId?: string, options?: CursorOptions) {
 			canvasToolbarState.selectedIds = [];
 			commitStrokeHistory();
 			requestRender();
+			resetSessionState();
 			options?.onComplete?.();
 		}
 	});
