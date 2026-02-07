@@ -1,4 +1,4 @@
-import type { Point } from '$lib/types';
+import type { BoundingBox, Point } from '$lib/types';
 
 // --- Action Types ---
 
@@ -64,7 +64,7 @@ export type HoverResponseParams = {
 
 export type ShowHoverParams = {
 	clusterId: string;
-	bounds: { minX: number; minY: number; maxX: number; maxY: number };
+	bounds: BoundingBox;
 	title?: string;
 	content?: string;
 	analysisItemId?: string;

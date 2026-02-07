@@ -12,7 +12,9 @@
 		requestItemRetry,
 		navigateHistoryPrev,
 		navigateHistoryNext,
-		getDisplayedItem
+		getDisplayedItem,
+		handleRecreate,
+		handleRetrace
 	} from '$lib/stores/analysis.svelte';
 	import { CANVAS_WIDTH, CANVAS_HEIGHT } from '$lib/utils/constants';
 	import {
@@ -309,6 +311,55 @@
 									{displayed?.content ?? item.content}
 								</p>
 
+								{#if displayed?.generatedImageUrl || item.generatedImageUrl}
+									<div class="mb-3 flex flex-col gap-2">
+										<span class="text-[10px] font-medium tracking-wider text-white/40 uppercase"
+											>AI Generation</span
+										>
+										<div class="grid grid-cols-2 gap-2">
+											<div
+												class="relative aspect-square overflow-hidden rounded-lg border border-white/10 bg-black/50"
+											>
+												<img
+													src={displayed?.generatedImageUrl ?? item.generatedImageUrl}
+													alt="AI Generated"
+													class="absolute inset-0 h-full w-full object-contain p-1"
+												/>
+												<div
+													class="absolute right-0 bottom-0 left-0 bg-black/60 px-1 py-0.5 text-center text-[8px] text-white/80"
+												>
+													Raw Output
+												</div>
+											</div>
+											{#if displayed?.generatedSvg || item.generatedSvg}
+												<div
+													class="relative aspect-square overflow-hidden rounded-lg border border-white/10 bg-white/5 p-1"
+												>
+													<div class="h-full w-full opacity-80">
+														<!-- eslint-disable-next-line svelte/no-at-html-tags -->
+														{@html displayed?.generatedSvg ?? item.generatedSvg}
+													</div>
+													<div
+														class="absolute right-0 bottom-0 left-0 bg-black/60 px-1 py-0.5 text-center text-[8px] text-white/80"
+													>
+														Vector Trace
+													</div>
+													<div class="absolute top-1 right-1">
+														<button
+															onclick={() => handleRetrace(item.id)}
+															class="rounded bg-black/50 p-1 text-white/70 hover:bg-black/70 hover:text-white"
+															title="Retrace Image"
+															aria-label="Retrace Image"
+														>
+															<RefreshCcw class="h-3 w-3" />
+														</button>
+													</div>
+												</div>
+											{/if}
+										</div>
+									</div>
+								{/if}
+
 								<!-- Feedback section -->
 								<div class="flex items-center gap-2">
 									<div class="flex items-center gap-1">
@@ -389,6 +440,16 @@
 												</button>
 											{/if}
 										</div>
+										{#if item.imageUrl}
+											<button
+												onclick={() => handleRecreate(item.id)}
+												disabled={analysisResults.isProcessing}
+												class="ml-auto rounded bg-blue-500/20 px-2 py-1 text-[10px] font-medium text-blue-300 transition-colors hover:bg-blue-500/30 hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+												title="Recreate stroke with AI"
+											>
+												Recreate
+											</button>
+										{/if}
 									</div>
 								</div>
 							</div>

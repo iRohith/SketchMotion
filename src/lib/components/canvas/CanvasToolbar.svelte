@@ -7,7 +7,17 @@
 		setBrushColor,
 		canvasToolbarState
 	} from '$lib/stores/canvasToolbar.svelte';
-	import { Pencil, Redo2, SquareDashed, Undo2, Ungroup, Wand, Trash2 } from '@lucide/svelte';
+	import {
+		Pencil,
+		Redo2,
+		SquareDashed,
+		Undo2,
+		Ungroup,
+		Wand,
+		Trash2,
+		Sparkles
+	} from '@lucide/svelte';
+	import { triggerManualSelectionAnalysis } from '$lib/stores/analysis.svelte';
 	import { BRUSH_SIZES } from '$lib/utils/constants';
 	import { Layer } from '$lib/types';
 	import ColorPalette from '../widgets/ColorPalette.svelte';
@@ -162,6 +172,17 @@
 		isSelectMode && groupSelect,
 		'violet',
 		groupSelect ? Wand : Ungroup
+	)}
+
+	<!-- Analyze stroke -->
+	{@render ToolbarButton(
+		'tool-analyze',
+		isFinal || !isSelectMode || canvasToolbarState.selectedIds.length === 0,
+		'Analyze selection',
+		() => triggerManualSelectionAnalysis(new Set(canvasToolbarState.selectedIds)),
+		false,
+		'violet',
+		Sparkles
 	)}
 
 	<!-- Delete stroke -->

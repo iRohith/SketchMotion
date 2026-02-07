@@ -99,7 +99,7 @@ export function canvasToScreen(canvasPoint: Point): Point | null {
 	};
 }
 
-function createStrokeId(): string {
+export function createStrokeId(): string {
 	return `stroke_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 

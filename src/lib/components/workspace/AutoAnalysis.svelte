@@ -28,6 +28,8 @@
 		setItemSuccess,
 		registerRetryHandler,
 		unregisterRetryHandler,
+		registerManualSelectionHandler,
+		unregisterManualSelectionHandler,
 		type FeedbackEvent
 	} from '$lib/stores/analysis.svelte';
 	import {
@@ -69,12 +71,104 @@
 		registerAnalysisTrigger(runAccumulation);
 		registerFeedbackHandler(handleFeedbackEvent);
 		registerRetryHandler(handleRetry);
+		registerManualSelectionHandler(handleManualSelectionAnalysis);
 		return () => {
 			unregisterAnalysisTrigger();
 			unregisterFeedbackHandler();
 			unregisterRetryHandler();
+			unregisterManualSelectionHandler();
 		};
 	});
+
+	function handleManualSelectionAnalysis(selectedIds: Set<string>) {
+		if (selectedIds.size === 0) return;
+		console.log(
+			'[AutoAnalysis] Manual selection analysis triggered for',
+			selectedIds.size,
+			'strokes'
+		);
+
+		// 1. Check if we already have a tracker for these strokes (exact or approximate)
+		// For manual trigger, we want to analyze EXACTLY what is selected.
+		// If there is an existing cluster that contains these strokes, we might use it,
+		// but if the selection is different, we should probably treat it as a new intent.
+
+		// Let's look for a cluster that significantly overlaps or is contained
+		let targetClusterId: string | undefined;
+
+		for (const [clusterId, tracker] of trackedClusters.entries()) {
+			const intersection = new Set([...selectedIds].filter((x) => tracker.strokeIds.has(x)));
+			const overlap = intersection.size / Math.max(selectedIds.size, tracker.strokeIds.size);
+
+			if (overlap > 0.8) {
+				// High overlap - reuse cluster
+				targetClusterId = clusterId;
+				break;
+			}
+		}
+
+		if (targetClusterId) {
+			// Update existing cluster
+			const tracker = trackedClusters.get(targetClusterId)!;
+			tracker.strokeIds = new Set(selectedIds);
+			tracker.lastUpdate = Date.now();
+			tracker.skipped = false;
+
+			// Recalculate bounds
+			const strokesList = getStrokeList(selectedIds);
+			const bounds = calculateBoundingBox(strokesList);
+			if (bounds) {
+				tracker.bounds = {
+					...bounds,
+					width: bounds.width,
+					height: bounds.height,
+					centerX: bounds.centerX,
+					centerY: bounds.centerY
+				};
+			}
+		} else {
+			// Create new cluster
+			const strokesList = getStrokeList(selectedIds);
+			const bounds = calculateBoundingBox(strokesList);
+			if (!bounds) return;
+
+			targetClusterId = crypto.randomUUID();
+			trackedClusters.set(targetClusterId, {
+				strokeIds: new Set(selectedIds),
+				analysisItemId: null,
+				bounds: {
+					...bounds,
+					width: bounds.width,
+					height: bounds.height,
+					centerX: bounds.centerX,
+					centerY: bounds.centerY
+				},
+				lastUpdate: Date.now(),
+				skipped: false,
+				retryCount: 0
+			});
+		}
+
+		// Queue for analysis with skipPrompt
+		const queueItem: QueueItem = {
+			id: `queue-${Date.now()}`,
+			clusterId: targetClusterId,
+			strokeIds: new Set(selectedIds),
+			timestamp: Date.now(),
+			status: 'pending',
+			skipPrompt: true
+		};
+
+		// Remove any existing pending items for this cluster
+		autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
+			(i) => i.clusterId !== targetClusterId
+		);
+
+		autoAnalysisState.analysisQueue.push(queueItem);
+		autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
+
+		processQueueItem(queueItem);
+	}
 
 	// Handle retry requests from the Analysis UI
 	function handleRetry(itemId: string, clusterId: string) {
@@ -375,7 +469,11 @@
 						minX: newBounds.minX,
 						minY: newBounds.minY,
 						maxX: newBounds.maxX,
-						maxY: newBounds.maxY
+						maxY: newBounds.maxY,
+						width: newBounds.width,
+						height: newBounds.height,
+						centerX: newBounds.centerX,
+						centerY: newBounds.centerY
 					};
 				}
 				tracker.lastUpdate = Date.now();
@@ -394,7 +492,11 @@
 						minX: bounds.minX,
 						minY: bounds.minY,
 						maxX: bounds.maxX,
-						maxY: bounds.maxY
+						maxY: bounds.maxY,
+						width: bounds.width,
+						height: bounds.height,
+						centerX: bounds.centerX,
+						centerY: bounds.centerY
 					},
 					lastUpdate: Date.now(),
 					skipped: false,
@@ -557,11 +659,18 @@
 			return;
 		}
 
-		// Show "Analyze this?" prompt
-		item.status = 'awaiting';
-		autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
+		let askResult: 'yes' | 'no' | 'dismissed' = 'yes';
 
-		const askResult = await showAskHover(item.clusterId, tracker.bounds);
+		if (!item.skipPrompt) {
+			// Show "Analyze this?" prompt
+			item.status = 'awaiting';
+			autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
+
+			// Wait for 100ms to ensure UI updates before showing hover (optional, but good practice)
+			await new Promise((r) => setTimeout(r, 100));
+
+			askResult = await showAskHover(item.clusterId, tracker.bounds);
+		}
 
 		if (askResult === 'no') {
 			// User declined, remove from queue
@@ -593,9 +702,24 @@
 
 			// Create loading item immediately (or use existing one)
 			let analysisId = tracker.analysisItemId;
-			if (!analysisId) {
+
+			// Check if item actually exists in store
+			const existingItem = analysisId
+				? analysisResults.items.find((i) => i.id === analysisId)
+				: null;
+
+			if (!existingItem) {
 				analysisId = addLoadingItem(item.clusterId, tracker.bounds);
 				tracker.analysisItemId = analysisId;
+			} else {
+				// Update existing item to loading state
+				existingItem.status = 'loading';
+				existingItem.title = 'Analyzing...';
+				// Reset feedback
+				existingItem.feedback = null;
+				existingItem.feedbackText = '';
+				// Highlight it
+				analysisResults.highlightedItemId = analysisId;
 			}
 
 			// Save current stroke IDs before any AI-suggested merge
@@ -626,7 +750,7 @@
 
 			if (response.status === 429) {
 				console.warn('[AutoAnalysis] Throttled. Waiting 5s before retry.');
-				setItemError(analysisId, 'Rate limited. Retrying...');
+				if (analysisId) setItemError(analysisId, 'Rate limited. Retrying...');
 				item.status = 'pending';
 				autoAnalysisState.analysisQueue = [...autoAnalysisState.analysisQueue];
 				await new Promise((r) => setTimeout(r, 5000));
@@ -638,7 +762,7 @@
 				const errorData = (await response.json().catch(() => ({}))) as { error?: string };
 				const errorMsg = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
 				console.error(`[AutoAnalysis] Response error: ${errorMsg}`);
-				setItemError(analysisId, errorMsg);
+				if (analysisId) setItemError(analysisId, errorMsg);
 				autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
 					(i) => i.id !== item.id
 				);
@@ -710,22 +834,24 @@
 				}
 
 				// Update the analysis item to success with new bounds
-				setItemSuccess(
-					analysisId,
-					data.title,
-					data.content,
-					data.objectId,
-					intentImage,
-					tracker.bounds,
-					contextImage
-				);
-				console.log('[AutoAnalysis] Updated item to success:', analysisId);
+				if (analysisId) {
+					setItemSuccess(
+						analysisId,
+						data.title,
+						data.content,
+						data.objectId,
+						intentImage,
+						tracker.bounds,
+						contextImage
+					);
+					console.log('[AutoAnalysis] Updated item to success:', analysisId);
 
-				// Show result hover with Yes/No feedback
-				showResultHover(item.clusterId, analysisId, tracker.bounds, data.title, data.content);
+					// Show result hover with Yes/No feedback
+					showResultHover(item.clusterId, analysisId, tracker.bounds, data.title, data.content);
+				}
 			} else {
 				// API returned success:false or missing data
-				setItemError(analysisId, 'Analysis returned no results');
+				if (analysisId) setItemError(analysisId, 'Analysis returned no results');
 			}
 
 			autoAnalysisState.analysisQueue = autoAnalysisState.analysisQueue.filter(
@@ -781,28 +907,77 @@
 		const strokeToColor = new Map<string, string>();
 		const targetStrokeIds = new Set<string>();
 
+		// If the target cluster is tracked, use its strokes as the target
+		// This handles both auto-analysis clusters and manual selections
+		if (targetClusterId && trackedClusters.has(targetClusterId)) {
+			const tracker = trackedClusters.get(targetClusterId);
+			if (tracker) {
+				tracker.strokeIds.forEach((id) => targetStrokeIds.add(id));
+			}
+		}
+
 		console.log(
 			'[CaptureCanvasState] targetClusterId:',
 			targetClusterId,
 			'groups.size:',
-			groups.size
+			groups.size,
+			'tracked target strokes:',
+			targetStrokeIds.size
 		);
+
+		// Reserve one color specifically for the target group
+		const targetColor = 'hsl(300, 100%, 50%)'; // Magenta for target
 
 		let colorIndex = 0;
 		for (const [groupId, groupStrokeIds] of groups.entries()) {
 			const color = groupColors[colorIndex % groupColors.length];
-			colorMapping.push({
-				color,
-				groupId,
-				strokeIds: Array.from(groupStrokeIds)
-			});
+
+			// Check if this group is PART of the target selection (for manual selection case)
+			// BUT: We want strict behavior:
+			// If we have a target tracked cluster, any stroke in it gets the target color.
+			// Any stroke NOT in it gets the group color.
+
+			const strokeIdsList = Array.from(groupStrokeIds);
+
+			// For manual selection, we might split existing groups.
+			// We only want to report the non-targeted parts as "existing groups" to avoid confusion.
+			const nonTargetIds = strokeIdsList.filter((id) => !targetStrokeIds.has(id));
+
+			if (nonTargetIds.length > 0) {
+				colorMapping.push({
+					color,
+					groupId,
+					strokeIds: nonTargetIds
+				});
+			} else {
+				// Even if empty (fully consumed by target), we might want to keep the group entry
+				// to signal "this group is being analyzed", but let's prioritize the target grouping.
+			}
+
 			for (const strokeId of groupStrokeIds) {
-				strokeToColor.set(strokeId, color);
-				if (groupId === targetClusterId) {
+				// If this stroke is part of our target selection, force it to have the target color
+				if (targetStrokeIds.has(strokeId)) {
+					strokeToColor.set(strokeId, targetColor);
+				} else {
+					strokeToColor.set(strokeId, color);
+				}
+
+				// Fallback logic for legacy/direct group matching
+				if (targetStrokeIds.size === 0 && groupId === targetClusterId) {
 					targetStrokeIds.add(strokeId);
+					strokeToColor.set(strokeId, targetColor);
 				}
 			}
 			colorIndex++;
+		}
+
+		// Add the target cluster as a single group in color mapping if we have target strokes
+		if (targetStrokeIds.size > 0) {
+			colorMapping.push({
+				color: targetColor,
+				groupId: targetClusterId || 'manual-selection',
+				strokeIds: Array.from(targetStrokeIds)
+			});
 		}
 
 		console.log(
@@ -980,29 +1155,39 @@
 				</div>
 			</div>
 		{:else if analysisHover.current.type === 'result'}
-			<!-- Post-Analysis Result -->
-			<div class="flex max-w-xs flex-col gap-2">
-				<div class="text-sm font-medium text-white">{analysisHover.current.title}</div>
-				<div class="line-clamp-2 text-xs text-white/60">{analysisHover.current.content}</div>
-				<div class="flex items-center gap-2 border-t border-white/10 pt-2">
-					<span class="text-xs text-white/50">Correct?</span>
-					<div class="flex gap-1">
+			<div class="flex max-w-xs min-w-50 flex-col gap-2">
+				<!-- Post-Analysis Result -->
+				<div class="flex flex-col gap-2">
+					<div class="flex items-start justify-between">
+						<div class="text-sm font-medium text-white">{analysisHover.current.title}</div>
 						<button
-							class="rounded-full p-1 text-green-400 transition-colors hover:bg-green-400/20"
-							onclick={() => handleResultFeedback('yes')}
-							title="Yes"
-							data-demo-id="hover-feedback-yes-{analysisHover.current.clusterId}"
+							class="-mt-1 -mr-1 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white"
+							onclick={() => dismissHover('dismissed')}
 						>
-							<CircleCheck size={16} />
+							<CircleX size={14} />
 						</button>
-						<button
-							class="rounded-full p-1 text-red-400 transition-colors hover:bg-red-400/20"
-							onclick={() => handleResultFeedback('no')}
-							title="No"
-							data-demo-id="hover-feedback-no-{analysisHover.current.clusterId}"
-						>
-							<CircleX size={16} />
-						</button>
+					</div>
+					<div class="line-clamp-2 text-xs text-white/60">{analysisHover.current.content}</div>
+					<div class="flex items-center gap-2 border-t border-white/10 pt-2">
+						<span class="text-xs text-white/50">Correct?</span>
+						<div class="flex gap-1">
+							<button
+								class="rounded-full p-1 text-green-400 transition-colors hover:bg-green-400/20"
+								onclick={() => handleResultFeedback('yes')}
+								title="Yes"
+								data-demo-id="hover-feedback-yes-{analysisHover.current.clusterId}"
+							>
+								<CircleCheck size={16} />
+							</button>
+							<button
+								class="rounded-full p-1 text-red-400 transition-colors hover:bg-red-400/20"
+								onclick={() => handleResultFeedback('no')}
+								title="No"
+								data-demo-id="hover-feedback-no-{analysisHover.current.clusterId}"
+							>
+								<CircleX size={16} />
+							</button>
+						</div>
 					</div>
 				</div>
 			</div>

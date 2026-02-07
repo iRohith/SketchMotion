@@ -1,4 +1,4 @@
-import type { BoundingBox } from './analysis.svelte';
+import type { BoundingBox } from '$lib/types';
 
 // --- Types ---
 
@@ -8,6 +8,7 @@ export type QueueItem = {
 	strokeIds: Set<string>;
 	timestamp: number;
 	status: 'pending' | 'awaiting' | 'sending' | 'sent';
+	skipPrompt?: boolean;
 };
 
 export type TrackedCluster = {
@@ -24,9 +25,14 @@ export type TrackedCluster = {
 };
 
 // --- State ---
+export interface AutoAnalysisState {
+	analysisQueue: QueueItem[];
+	isSending: boolean;
+	lastSnapshotTime: number;
+}
 
-export const autoAnalysisState = $state({
-	analysisQueue: [] as QueueItem[],
+export const autoAnalysisState = $state<AutoAnalysisState>({
+	analysisQueue: [],
 	isSending: false,
 	lastSnapshotTime: 0
 });
