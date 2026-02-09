@@ -9,29 +9,37 @@ const recordedData = drawingData as unknown as RecordedData;
 
 // Convert recorded actions to demo actions
 function createScenarioFromRecording(): DemoAction[] {
-	const actions: DemoAction[] = [{ action: 'show' }, { action: 'delay', params: { ms: 500 } }];
+	const actions: DemoAction[] = [
+		{ action: 'show' },
+		{ action: 'delay', params: { ms: 500 } },
+		{
+			action: 'showNarration',
+			params: {
+				text: 'Welcome to SketchMotion! Watch as AI understands your drawings in real-time ✨',
+				duration: 4000,
+				sound: 'typing'
+			}
+		}
+	];
 
 	let currentColor = '';
 	const delayBetweenStrokes = 200;
 	const TARGET_DURATION_PER_COLOR = 3000;
 
-	// Pass 1: Aggregate durations by semantic group (using the first part of the ID)
 	const groupDurations: Record<string, number> = {};
 
 	recordedData.forEach((stroke) => {
-		const groupId = stroke.id.split('-')[1]; // stroke-hill-1 -> hill
+		const groupId = stroke.id.split('-')[1];
 		const points = stroke.points;
 		const duration = points.length > 0 ? points[points.length - 1].t : 1000;
 		groupDurations[groupId] = (groupDurations[groupId] || 0) + duration;
 	});
 
-	// Pass 2: Calculate scale factors per group
 	const groupScales: Record<string, number> = {};
 	for (const [groupId, totalDuration] of Object.entries(groupDurations)) {
 		groupScales[groupId] = totalDuration > 0 ? TARGET_DURATION_PER_COLOR / totalDuration : 1;
 	}
 
-	// Pass 3: Group strokes by semantic name
 	const semanticGroups: Record<string, Stroke[]> = {};
 	const groupOrder: string[] = [];
 
@@ -44,13 +52,13 @@ function createScenarioFromRecording(): DemoAction[] {
 		semanticGroups[groupId].push(stroke);
 	});
 
-	// Pass 4: Generate Actions group by group
-	groupOrder.forEach((groupId) => {
+	const addStrokesForGroup = (groupId: string) => {
 		const strokes = semanticGroups[groupId];
+		if (!strokes) return;
+
 		const scale = groupScales[groupId];
 
 		strokes.forEach((stroke) => {
-			// Handle Color Change
 			if (stroke.color !== currentColor) {
 				actions.push({
 					action: 'setBrushColor',
@@ -62,7 +70,6 @@ function createScenarioFromRecording(): DemoAction[] {
 				currentColor = stroke.color;
 			}
 
-			// Draw the stroke
 			const points = stroke.points;
 			const originalDuration = points.length > 0 ? points[points.length - 1].t : 1000;
 
@@ -82,35 +89,140 @@ function createScenarioFromRecording(): DemoAction[] {
 		});
 
 		actions.push({ action: 'delay', params: { ms: 800 } });
+	};
 
-		actions.push({ action: 'moveCursor', elementId: 'workspace-panel', duration: 400 });
-		actions.push({ action: 'triggerAnalysis' });
+	// Helper to add IDs
+	const getIds = (id: string) => semanticGroups[id]?.map((s) => s.id) || [];
+
+	const hillIds = getIds('hill');
+	const sunIds = getIds('sun');
+	const riverIds = getIds('river');
+	const giraffeIds = getIds('giraffe');
+	const zebraIds = getIds('zebra');
+
+	// --- 1. Hill ---
+	addStrokesForGroup('hill');
+
+	if (hillIds.length > 0) {
+		actions.push({
+			action: 'showManualAskHover',
+			params: { groupId: 'hill', strokeIds: hillIds }
+		});
+		actions.push({ action: 'delay', params: { ms: 50 } });
+	}
+
+	// --- 2. Sun ---
+	addStrokesForGroup('sun');
+
+	if (sunIds.length > 0) {
+		actions.push({
+			action: 'performFullManualAnalysis',
+			params: { groupId: 'sun', strokeIds: sunIds }
+		});
+
+		// Wait for Result Hover to appear and be ready
 		actions.push({ action: 'delay', params: { ms: 1500 } });
 
-		if (groupId === 'zebra') {
-			actions.push({ action: 'handleAskResponse', params: { response: 'yes' }, duration: 600 });
-			actions.push({ action: 'delay', params: { ms: 2000 } });
+		const sunAnalysisDuration = 3000;
+		actions.push({
+			action: 'showNarration',
+			params: {
+				text: 'Analyzing the scene context... 🧠',
+				duration: sunAnalysisDuration,
+				sound: 'typing'
+			}
+		});
 
-			actions.push({ action: 'handleResultFeedback', params: { response: 'no' }, duration: 600 });
-			actions.push({ action: 'delay', params: { ms: 1500 } });
-
-			actions.push({ action: 'handleAskResponse', params: { response: 'yes' }, duration: 600 });
-			actions.push({ action: 'delay', params: { ms: 2000 } });
-
-			actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
-			actions.push({ action: 'delay', params: { ms: 800 } });
-		} else {
-			actions.push({ action: 'handleAskResponse', params: { response: 'yes' }, duration: 600 });
-			actions.push({ action: 'delay', params: { ms: 2000 } });
-
-			actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
-			actions.push({ action: 'delay', params: { ms: 800 } });
-		}
-
+		actions.push({ action: 'playSound', params: { sound: 'click' } });
+		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
 		actions.push({ action: 'delay', params: { ms: 400 } });
-	});
+	}
 
-	// End demo
+	// --- 3. River ---
+	addStrokesForGroup('river');
+
+	if (riverIds.length > 0) {
+		actions.push({
+			action: 'performFullManualAnalysis',
+			params: { groupId: 'river', strokeIds: riverIds }
+		});
+
+		// Wait for Result Hover to appear and be ready
+		actions.push({ action: 'delay', params: { ms: 1500 } });
+
+		actions.push({ action: 'playSound', params: { sound: 'click' } });
+		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
+		actions.push({ action: 'delay', params: { ms: 400 } });
+	}
+
+	// --- 4. Giraffe ---
+	addStrokesForGroup('giraffe');
+
+	if (giraffeIds.length > 0) {
+		actions.push({
+			action: 'performFullManualAnalysis',
+			params: { groupId: 'giraffe', strokeIds: giraffeIds }
+		});
+
+		// Wait for Result Hover to appear and be ready
+		actions.push({ action: 'delay', params: { ms: 1500 } });
+
+		actions.push({ action: 'playSound', params: { sound: 'click' } });
+		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
+		actions.push({ action: 'delay', params: { ms: 1000 } });
+
+		const giraffeRecreateDuration = 2500;
+		actions.push({
+			action: 'showNarration',
+			params: {
+				text: 'Generating high-fidelity asset... 🎨',
+				duration: giraffeRecreateDuration,
+				sound: 'typing'
+			}
+		});
+	}
+
+	// --- 5. Zebra ---
+	addStrokesForGroup('zebra');
+
+	if (zebraIds.length > 0) {
+		// First pass (Horse)
+		actions.push({
+			action: 'performFullManualAnalysis',
+			params: { groupId: 'zebra', strokeIds: zebraIds }
+		});
+
+		// Wait for Result Hover to appear and be ready
+		actions.push({ action: 'delay', params: { ms: 1500 } });
+
+		actions.push({ action: 'playSound', params: { sound: 'click' } });
+		actions.push({ action: 'handleResultFeedback', params: { response: 'no' }, duration: 600 });
+		actions.push({ action: 'delay', params: { ms: 1000 } });
+
+		const zebraFeedbackDuration = 2500;
+		actions.push({
+			action: 'showNarration',
+			params: {
+				text: 'Refining context with feedback... ✍️',
+				duration: zebraFeedbackDuration,
+				sound: 'typing'
+			}
+		});
+
+		// Retry (Zebra -> Yes)
+		actions.push({
+			action: 'performFullManualAnalysis',
+			params: { groupId: 'zebra', strokeIds: zebraIds, isRetry: true }
+		});
+
+		// Wait for Result Hover to appear and be ready
+		actions.push({ action: 'delay', params: { ms: 1500 } });
+
+		actions.push({ action: 'playSound', params: { sound: 'click' } });
+		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
+		actions.push({ action: 'delay', params: { ms: 400 } });
+	}
+
 	actions.push({ action: 'delay', params: { ms: 1000 } });
 	actions.push({ action: 'stopDemo', elementId: 'demo-button', duration: 1000 });
 

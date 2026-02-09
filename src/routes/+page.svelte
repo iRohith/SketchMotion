@@ -2,6 +2,7 @@
 	import CanvasPanel from '$lib/components/canvas/CanvasPanel.svelte';
 	import CanvasToolbar from '$lib/components/canvas/CanvasToolbar.svelte';
 	import DemoCursor from '$lib/components/DemoCursor.svelte';
+	import NarrationBubble from '$lib/components/NarrationBubble.svelte';
 	import AutoAnalysis from '$lib/components/workspace/AutoAnalysis.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import WorkspacePanel from '$lib/components/workspace/WorkspacePanel.svelte';
@@ -9,6 +10,7 @@
 </script>
 
 <DemoCursor />
+<NarrationBubble />
 <AutoAnalysis />
 
 <div class="flex h-full w-full flex-col p-3 lg:h-screen lg:w-screen">

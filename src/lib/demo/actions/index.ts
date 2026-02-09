@@ -3,6 +3,7 @@ import { cursorActions } from './cursor';
 import { toolbarActions } from './toolbar';
 import { canvasActions } from './canvas';
 import { analysisActions } from './analysis';
+import { narrationActions } from './narration';
 
 /**
  * Register all demo actions with the registry.
@@ -13,6 +14,7 @@ export function registerAllActions(): void {
 	registerActions(toolbarActions);
 	registerActions(canvasActions);
 	registerActions(analysisActions);
+	registerActions(narrationActions);
 
 	console.log('[DemoActions] All actions registered.');
 }
@@ -22,3 +24,4 @@ export { cursorActions } from './cursor';
 export { toolbarActions } from './toolbar';
 export { canvasActions } from './canvas';
 export { analysisActions } from './analysis';
+export { narrationActions } from './narration';

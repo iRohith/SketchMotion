@@ -64,13 +64,14 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 			createPartFromBase64(base64Data, mimeType)
 		];
 
-		console.log('[API] Generating image with gemini-3-pro-image-preview...');
+		console.log('[API] Generating image with gemini-2.5-flash-image...');
 
 		// Using the user-specified model
 		// Call Gemini with image generation configuration
 		const response = await client.models.generateContent({
 			// model: 'gemini-3-pro-image-preview',
-			model: 'gemini-2.5-flash-image',
+			// model: 'gemini-2.5-flash-image',
+			model: 'imagen-4.0-fast-generate-001',
 			contents,
 			config: {
 				responseModalities: ['IMAGE']

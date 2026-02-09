@@ -49,7 +49,6 @@
 
 	// --- Configuration ---
 	const IDLE_THRESHOLD = 1500;
-	const DEMO_IDLE_THRESHOLD = 500;
 	const MAX_RETRIES = 3;
 	const SEND_DELAY = $derived(demoCursor.visible ? 200 : 1000);
 
@@ -449,6 +448,9 @@
 			if (!bounds) continue;
 
 			let hasNewContent = false;
+			if (demoCursor.visible) {
+				hasNewContent = true;
+			}
 			for (const s of clusterStrokes) {
 				const endT = s.points[s.points.length - 1]?.t || 0;
 				if (endT > autoAnalysisState.lastSnapshotTime) {
