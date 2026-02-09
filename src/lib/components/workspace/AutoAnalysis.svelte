@@ -6,7 +6,8 @@
 		groupState,
 		calculateBoundingBox,
 		groups,
-		requestRender
+		requestRender,
+		canvasState
 	} from '$lib/stores/canvas.svelte';
 	import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 	import {
@@ -322,11 +323,11 @@
 		}
 	}
 
-	// Trigger accumulation when groups change (after idle)
+	// Trigger accumulation when last stroke update changes (after idle)
 	// In demo mode, skip the idle debounce
 	$effect(() => {
-		const version = groupState.version;
-		if (version < 0) return;
+		const lastStrokeUpdate = canvasState.lastStrokeUpdate;
+		if (lastStrokeUpdate <= 0) return;
 
 		// In demo mode, skip idle debounce - wait for manual trigger
 		if (demoCursor.visible) {
@@ -1058,6 +1059,25 @@
 		if (targetStrokeIds.size === 0) {
 			drawStrokes(ctx, strokes.values(), { opacity: 1.0 });
 		} else {
+			// Calculate bounding box for target strokes
+			const targetStrokeList = Array.from(strokes.values()).filter((s) =>
+				targetStrokeIds.has(s.id)
+			);
+			const bbox = calculateBoundingBox(targetStrokeList);
+
+			if (bbox) {
+				// Draw Highlight Rectangle
+				ctx.save();
+				ctx.strokeStyle = 'rgba(168, 85, 247, 0.8)'; // Purple border
+				ctx.lineWidth = 2;
+				ctx.fillStyle = 'rgba(168, 85, 247, 0.15)'; // Translucent purple fill
+				ctx.beginPath();
+				ctx.rect(bbox.minX - 10, bbox.minY - 10, bbox.width + 20, bbox.height + 20);
+				ctx.fill();
+				ctx.stroke();
+				ctx.restore();
+			}
+
 			// Dimmed background strokes
 			drawStrokes(ctx, nonTargetStrokes, { opacity: 0.25 });
 			// Target strokes at full opacity
@@ -1072,7 +1092,27 @@
 		ctx.fillStyle = '#1e1e1e';
 		ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-		// First pass: Draw colored outlines
+		// First pass: Highlight Rectangle for context reference
+		if (targetStrokeIds.size > 0) {
+			const targetStrokeList = Array.from(strokes.values()).filter((s) =>
+				targetStrokeIds.has(s.id)
+			);
+			const bbox = calculateBoundingBox(targetStrokeList);
+
+			if (bbox) {
+				ctx.save();
+				ctx.strokeStyle = 'rgba(168, 85, 247, 0.8)';
+				ctx.lineWidth = 2;
+				ctx.fillStyle = 'rgba(168, 85, 247, 0.15)';
+				ctx.beginPath();
+				ctx.rect(bbox.minX - 10, bbox.minY - 10, bbox.width + 20, bbox.height + 20);
+				ctx.fill();
+				ctx.stroke();
+				ctx.restore();
+			}
+		}
+
+		// Second pass: Draw colored outlines
 		ctx.globalAlpha = 0.7;
 		for (const stroke of strokes.values()) {
 			const outlineColor = strokeToColor.get(stroke.id);

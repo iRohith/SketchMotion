@@ -2,7 +2,7 @@
 	import { Pen, Play, Square } from '@lucide/svelte';
 	import { demoCursor } from '$lib/stores/demoCursor.svelte';
 	import { runScenario, stopScenario, demoRunnerState, registerAllActions } from '$lib/demo';
-	import { quickDrawDemo } from '$lib/demo/scenarios';
+	import { recordedDemo } from '$lib/demo/recorded_scenario';
 	import { onMount } from 'svelte';
 
 	// Register all demo actions on mount
@@ -19,7 +19,7 @@
 				demoCursor.x = window.innerWidth / 2;
 				demoCursor.y = window.innerHeight / 2;
 			}
-			await runScenario(quickDrawDemo);
+			await runScenario(recordedDemo);
 		}
 	}
 </script>

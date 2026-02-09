@@ -11,7 +11,11 @@ interface TracerOptions {
 }
 
 // Simple implementation of Marching Squares for contour tracing
-export async function traceImage(imageUrl: string, options: TracerOptions = {}): Promise<Stroke[]> {
+export async function traceImage(
+	imageUrl: string,
+	originalStrokes: Stroke[] = [],
+	options: TracerOptions = {}
+): Promise<Stroke[]> {
 	const threshold = options.threshold ?? 128;
 	const traceColor = options.color ?? '#000000';
 
@@ -28,48 +32,33 @@ export async function traceImage(imageUrl: string, options: TracerOptions = {}):
 	const data = imageData.data;
 
 	// 3. Grid for Marching Squares
-	// We'll treat alpha > threshold as "inside" (1) and <= threshold as "outside" (0)
-	// Helper to get value at x,y
 	const getVal = (x: number, y: number) => {
 		if (x < 0 || y < 0 || x >= width || y >= height) return 0;
 		const idx = (y * width + x) * 4;
-		// Check alpha (idx + 3) and maybe RGB darkness (since output is black lines on white)
-		// Usually output is "black lines" -> low RGB, high Alpha.
-		// If input is white background with black lines:
-		// White = (255, 255, 255, 255)
-		// Black = (0, 0, 0, 255)
-		// We want to trace the BLACK parts.
-		// So "inside" = darker pixels.
 		const r = data[idx];
 		const g = data[idx + 1];
 		const b = data[idx + 2];
 		const a = data[idx + 3];
 		const brightness = (r + g + b) / 3;
-
 		// If transparent, it's outside. If opaque and dark, it's inside.
 		return a > 50 && brightness < threshold ? 1 : 0;
 	};
 
 	// 4. Marching Squares Algorithm
 	const visited = new Set<string>();
-	const strokes: Stroke[] = [];
-
-	// Step size to reduce resolution/noise
+	const contours: Stroke[] = [];
 	const step = 2;
 
 	for (let y = 0; y < height; y += step) {
 		for (let x = 0; x < width; x += step) {
 			if (getVal(x, y) === 1 && !visited.has(`${x},${y}`)) {
-				// Found a new black pixel, start tracing
 				const path = traceBoundary(x, y, getVal, visited, width, height);
 				if (path.length > 10) {
-					// Filter tiny dots
-					// Simplify path
 					const simplified = simplifyPath(path, 2);
 					const strokePoints = simplified.map((p) => ({
 						x: p.x,
 						y: p.y,
-						t: Date.now() // Dummy time
+						t: Date.now()
 					}));
 
 					if (strokePoints.length > 2) {
@@ -77,18 +66,197 @@ export async function traceImage(imageUrl: string, options: TracerOptions = {}):
 							id: createStrokeId(),
 							points: strokePoints,
 							color: traceColor,
-							size: 2, // Default size
+							size: 2,
 							layer: canvasToolbarState.activeLayer
 						};
 						stroke.bounding = calculateBoundingBox([stroke]) ?? undefined;
-						strokes.push(stroke);
+						contours.push(stroke);
 					}
 				}
 			}
 		}
 	}
 
-	return strokes;
+	// 5. Second Pass: Convert outlines to thick regular strokes
+	return refineStrokes(contours, originalStrokes);
+}
+
+function refineStrokes(contours: Stroke[], originalStrokes: Stroke[]): Stroke[] {
+	if (originalStrokes.length === 0) return contours;
+
+	const refined: Stroke[] = [];
+	const usedOriginals = new Set<string>();
+
+	for (const contour of contours) {
+		const bestMatch = findBestMatch(contour, originalStrokes, usedOriginals);
+
+		if (bestMatch) {
+			usedOriginals.add(bestMatch.id);
+			// Morph the original stroke to fit the contour
+			const morphed = morphStroke(bestMatch, contour);
+			refined.push(morphed);
+		} else {
+			// No match found - keep outline?
+			// Or maybe the contour IS the stroke (if thin enough)?
+			// For now, let's keep it but mark it?
+			// The user said "conversion", implying we prefer single strokes.
+			// But if we can't find a guide, the contour is the best we have.
+			refined.push(contour);
+		}
+	}
+
+	return refined;
+}
+
+function findBestMatch(contour: Stroke, candidates: Stroke[], exclude: Set<string>): Stroke | null {
+	if (!contour.bounding) return null;
+	const cBox = contour.bounding;
+	let best: Stroke | null = null;
+	let maxScore = 0;
+
+	for (const cand of candidates) {
+		if (exclude.has(cand.id)) continue;
+		if (!cand.bounding) continue;
+		const sBox = cand.bounding;
+
+		// Quick bbox check
+		if (
+			sBox.maxX < cBox.minX ||
+			sBox.minX > cBox.maxX ||
+			sBox.maxY < cBox.minY ||
+			sBox.minY > cBox.maxY
+		)
+			continue;
+
+		// Detailed overlap check
+		const score = calculateOverlap(cand, contour);
+		if (score > maxScore && score > 0.3) {
+			// Threshold 30% overlap
+			maxScore = score;
+			best = cand;
+		}
+	}
+
+	return best;
+}
+
+function calculateOverlap(stroke: Stroke, contour: Stroke): number {
+	// Intersection over Union (IoU) of points is hard for strokes.
+	// Instead, let's check how many points of 'stroke' are inside 'contour'.
+	let insideCount = 0;
+	let totalCount = 0;
+	const step = Math.max(1, Math.floor(stroke.points.length / 20));
+
+	for (let i = 0; i < stroke.points.length; i += step) {
+		totalCount++;
+		if (pointInPolygon(stroke.points[i], contour.points)) {
+			insideCount++;
+		}
+	}
+
+	return totalCount > 0 ? insideCount / totalCount : 0;
+}
+
+function pointInPolygon(p: { x: number; y: number }, polygon: { x: number; y: number }[]): boolean {
+	let inside = false;
+	for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+		const xi = polygon[i].x,
+			yi = polygon[i].y;
+		const xj = polygon[j].x,
+			yj = polygon[j].y;
+		const intersect = yi > p.y !== yj > p.y && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi;
+		if (intersect) inside = !inside;
+	}
+	return inside;
+}
+
+function morphStroke(original: Stroke, contour: Stroke): Stroke {
+	// 1. Calculate average width of the contour
+	//    Area approx = polygon area. Length approx = perimeter / 2?
+	//    Or better: area / original length
+	const area = polygonArea(contour.points);
+	const length = strokeLength(original.points);
+	const estimatedThickness = length > 0 ? Math.max(2, area / length) : original.size;
+
+	// 2. Center-alignment (Simple approach)
+	//    We keep the original points but could relax them towards the contour centroid?
+	//    Actually, if the AI fixed the shape, we WANT to move the points.
+	//    Let's clamp the original points to be strictly inside the contour.
+	const newPoints = original.points.map((p) => {
+		if (pointInPolygon(p, contour.points)) return { ...p };
+
+		// If outside, find nearest point on contour and move slightly inside
+		const nearest = findNearestPointOnPoly(p, contour.points);
+		// Move 90% towards nearest (snap to edge)
+		return {
+			x: p.x + (nearest.x - p.x) * 0.9,
+			y: p.y + (nearest.y - p.y) * 0.9,
+			t: p.t
+		};
+	});
+
+	return {
+		...original,
+		id: createStrokeId(),
+		points: newPoints,
+		size: estimatedThickness * 0.8, // Adjust scale slightly
+		// Use original color
+		color: original.color
+	};
+}
+
+function polygonArea(points: { x: number; y: number }[]): number {
+	let area = 0;
+	for (let i = 0; i < points.length; i++) {
+		const j = (i + 1) % points.length;
+		area += points[i].x * points[j].y;
+		area -= points[j].x * points[i].y;
+	}
+	return Math.abs(area) / 2;
+}
+
+function strokeLength(points: { x: number; y: number }[]): number {
+	let len = 0;
+	for (let i = 0; i < points.length - 1; i++) {
+		len += Math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
+	}
+	return len;
+}
+
+function findNearestPointOnPoly(
+	p: { x: number; y: number },
+	poly: { x: number; y: number }[]
+): { x: number; y: number } {
+	let minDst = Infinity;
+	let nearest = p;
+
+	for (let i = 0; i < poly.length; i++) {
+		const p1 = poly[i];
+		const p2 = poly[(i + 1) % poly.length];
+		const proj = projectPointOnSegment(p, p1, p2);
+		const dst = Math.hypot(p.x - proj.x, p.y - proj.y);
+		if (dst < minDst) {
+			minDst = dst;
+			nearest = proj;
+		}
+	}
+	return nearest;
+}
+
+function projectPointOnSegment(
+	p: { x: number; y: number },
+	a: { x: number; y: number },
+	b: { x: number; y: number }
+) {
+	const abx = b.x - a.x;
+	const aby = b.y - a.y;
+	const apx = p.x - a.x;
+	const apy = p.y - a.y;
+	const len2 = abx * abx + aby * aby;
+	if (len2 === 0) return a;
+	let t = (apx * abx + apy * aby) / len2;
+	t = Math.max(0, Math.min(1, t));
+	return { x: a.x + t * abx, y: a.y + t * aby };
 }
 
 function traceBoundary(

@@ -12,6 +12,7 @@
 		updateStroke,
 		commitStrokeHistory
 	} from '$lib/stores/canvas.svelte';
+	import { recorder, recordAction } from '$lib/stores/recorder.svelte';
 	import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 	import { Layer, type Point, type Stroke, type StrokePoint, type Transform } from '$lib/types';
 	import { CANVAS_HEIGHT, CANVAS_WIDTH } from '$lib/utils/constants';
@@ -298,6 +299,12 @@
 			}
 			const last = pts[pts.length - 1];
 			mainCtx.lineTo(last.x, last.y);
+			if (stroke.filled) {
+				mainCtx.closePath();
+				mainCtx.globalAlpha = 0.2; // Slight transparency for fill to see strokes behind? Or solid? User said "fill path". Let's do semi-transparent.
+				mainCtx.fill();
+				mainCtx.globalAlpha = 1;
+			}
 			mainCtx.stroke();
 
 			if (isHovered) {
@@ -320,6 +327,10 @@
 					}
 				}
 				mainCtx.lineTo(last.x, last.y);
+				if (stroke.filled) {
+					mainCtx.closePath();
+					// No fill on hover outline
+				}
 				mainCtx.stroke();
 			}
 			mainCtx.globalAlpha = 1;
@@ -718,6 +729,16 @@
 			refreshStrokeCache(activeStroke);
 			updateStroke(activeStroke);
 			commitStrokeHistory();
+
+			// Record action
+			if (recorder.isRecording) {
+				recordAction({
+					type: 'stroke_added',
+					timestamp: Date.now(),
+					stroke: $state.snapshot(activeStroke)
+				});
+			}
+
 			canvasToolbarState.isDrawing = false;
 			scheduleRender();
 		}

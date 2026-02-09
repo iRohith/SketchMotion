@@ -97,9 +97,9 @@ Your previous analysis was REJECTED. Think differently!
 	return `You are analyzing a SINGLE element in a hand-drawn sketch.
 
 ## 📷 IMAGE 1 (Intent Image) - YOUR ONLY FOCUS:
-- **BRIGHT strokes** = The SINGLE element you must identify
-- **DIM strokes** (faded) = IGNORE completely, these are other objects
-- Describe ONLY what the bright strokes represent
+- **BRIGHT strokes** inside the **translucent PURPLE rectangle** = The SINGLE element you must identify
+- **DIM strokes** (faded) outside the rectangle = IGNORE completely, these are other objects
+- Describe ONLY what the bright strokes INSIDE the purple highlight represent
 
 ## 📷 IMAGE 2 (Context Image) - Group Information:
 - Colored outlines show current groupings

@@ -347,7 +347,7 @@ export async function handleRecreate(sourceItemId: string) {
 		console.log('[Analysis] Image generated, tracing...');
 
 		// 2. Trace Image
-		const strokes = await traceImage(data.image, {
+		const strokes = await traceImage(data.image, usedStrokes, {
 			threshold: 128,
 			smoothing: 0.5
 		});
@@ -441,6 +441,8 @@ export async function handleRetrace(itemId: string) {
 
 	// Try to find original strokes to get color
 	let traceColor = canvasToolbarState.brushColor;
+	let originalStrokes: Stroke[] = [];
+
 	if (item.clusterId) {
 		const cluster = trackedClusters.get(item.clusterId);
 		if (cluster && cluster.strokeIds && cluster.strokeIds.size > 0) {
@@ -449,20 +451,23 @@ export async function handleRetrace(itemId: string) {
 			if (stroke) {
 				traceColor = stroke.color;
 			}
+			originalStrokes = Array.from(cluster.strokeIds)
+				.map((id) => strokes.get(id))
+				.filter((s): s is Stroke => s !== undefined);
 		}
 	}
 
 	try {
-		const strokes = await traceImage(item.generatedImageUrl, {
+		const resultStrokes = await traceImage(item.generatedImageUrl, originalStrokes, {
 			threshold: 128,
 			smoothing: 0.5,
 			color: traceColor
 		});
 
-		console.log(`[Analysis] Retraced ${strokes.length} strokes.`);
+		console.log(`[Analysis] Retraced ${resultStrokes.length} strokes.`);
 
 		// Generate SVG for display
-		const svgStrokes = strokes.reduce((acc, s) => {
+		const svgStrokes = resultStrokes.reduce((acc, s) => {
 			const points = s.points.map((p) => `${p.x},${p.y}`).join(' ');
 			return (
 				acc +
@@ -471,8 +476,8 @@ export async function handleRetrace(itemId: string) {
 		}, '');
 
 		let svgViewBox = '0 0 100 100';
-		if (strokes.length > 0) {
-			const b = calculateBoundingBox(strokes);
+		if (resultStrokes.length > 0) {
+			const b = calculateBoundingBox(resultStrokes);
 			if (b) {
 				svgViewBox = `${b.minX - 10} ${b.minY - 10} ${b.width + 20} ${b.height + 20}`;
 			}
@@ -486,6 +491,77 @@ export async function handleRetrace(itemId: string) {
 		// Update history entry if viewing one
 		if (item.historyIndex >= 0 && item.historyIndex < item.history.length) {
 			item.history[item.historyIndex].generatedSvg = generatedSvg;
+		}
+
+		// --- UPDATE STATE: Replace Hand-Drawn with Vector ---
+		if (item.clusterId && resultStrokes.length > 0) {
+			const cluster = trackedClusters.get(item.clusterId);
+			if (cluster) {
+				// 1. Remove old strokes
+				const oldStrokeIds = Array.from(cluster.strokeIds);
+				oldStrokeIds.forEach((id) => {
+					strokes.delete(id);
+				});
+
+				// 2. Add new strokes
+				const newStrokeIds = new Set<string>();
+
+				// Calculate transform to match source bounds
+				const tracedBounds = calculateBoundingBox(resultStrokes);
+				if (item.bounds && tracedBounds) {
+					const targetW = item.bounds.width;
+					const targetH = item.bounds.height;
+					const currentW = tracedBounds.width;
+					const currentH = tracedBounds.height;
+
+					// Avoid division by zero
+					const scaleX = currentW > 0 ? targetW / currentW : 1;
+					const scaleY = currentH > 0 ? targetH / currentH : 1;
+
+					const targetX = item.bounds.minX;
+					const targetY = item.bounds.minY;
+					const currentX = tracedBounds.minX;
+					const currentY = tracedBounds.minY;
+
+					resultStrokes.forEach((s) => {
+						s.filled = true; // Apply fill workaround
+						s.points.forEach((p) => {
+							// Localize, Scale, Translate
+							p.x = (p.x - currentX) * scaleX + targetX;
+							p.y = (p.y - currentY) * scaleY + targetY;
+						});
+						// Update cached bounds for individual stroke
+						s.bounding = calculateBoundingBox([s]) ?? undefined;
+
+						addStroke(s);
+						newStrokeIds.add(s.id);
+					});
+				} else {
+					// Fallback if no bounds info
+					resultStrokes.forEach((s) => {
+						s.filled = true;
+						addStroke(s);
+						newStrokeIds.add(s.id);
+					});
+				}
+
+				// 3. Update Cluster Tracker
+				cluster.strokeIds = newStrokeIds;
+				// Recalculate bounds of the transformed strokes (should match target exactly now)
+				const finalBounds = calculateBoundingBox(resultStrokes);
+				if (finalBounds) {
+					cluster.bounds = finalBounds;
+					item.bounds = finalBounds;
+				}
+				cluster.lastUpdate = Date.now();
+
+				// 4. Force Render
+				requestRender();
+
+				console.log(
+					`[Analysis] Swapped ${oldStrokeIds.length} hand-drawn strokes for ${resultStrokes.length} filled vector strokes (aligned to source).`
+				);
+			}
 		}
 	} catch (e) {
 		console.error('[Analysis] Retrace failed:', e);

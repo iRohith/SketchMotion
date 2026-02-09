@@ -12,6 +12,7 @@ export const strokeGroupMap = new Map<string, string>();
 export const groups = new Map<string, Set<string>>();
 export const renderPendingStore = $state({ renderPending: false });
 export const groupState = $state({ version: 0 });
+export const canvasState = $state({ lastStrokeUpdate: 0 });
 
 export const groupingSettings = $state<GroupingSettings>({
 	groupingThreshold: 0.3,
@@ -24,6 +25,10 @@ function applyStrokeSnapshot(snapshot: Stroke[]) {
 		strokes.set(stroke.id, stroke);
 	}
 	canvasToolbarState.selectedIds = [];
+	// Don't recompute groups here, rely on caller or force
+	// Actually applyStrokeSnapshot is used by undo/redo which usually implies recompute is needed?
+	// But let's act consistently.
+	canvasState.lastStrokeUpdate = Date.now();
 	recomputeGroups();
 	requestRender();
 }
@@ -54,15 +59,18 @@ function scheduleGroupRecompute() {
 
 export function addStroke(stroke: Stroke) {
 	strokes.set(stroke.id, stroke);
+	canvasState.lastStrokeUpdate = Date.now();
 	scheduleGroupRecompute();
 }
 
 export function updateStroke(stroke: Stroke) {
 	strokes.set(stroke.id, stroke);
+	canvasState.lastStrokeUpdate = Date.now();
 }
 
 export function deleteStroke(strokeId: string) {
 	strokes.delete(strokeId);
+	canvasState.lastStrokeUpdate = Date.now();
 	scheduleGroupRecompute();
 }
 
@@ -78,6 +86,7 @@ export function deleteSelectedStrokes(elementId?: string, options?: CursorOption
 				strokes.delete(id);
 			});
 			canvasToolbarState.selectedIds = [];
+			canvasState.lastStrokeUpdate = Date.now();
 			scheduleGroupRecompute();
 			commitStrokeHistory();
 			requestRender();
@@ -94,6 +103,7 @@ export function deleteAllStrokes(elementId?: string, options?: CursorOptions) {
 			strokeGroupMap.clear();
 			groups.clear();
 			groupState.version++;
+			canvasState.lastStrokeUpdate = Date.now();
 			canvasToolbarState.selectedIds = [];
 			commitStrokeHistory();
 			requestRender();

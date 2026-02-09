@@ -43,6 +43,7 @@ export interface Stroke {
 	transform?: Transform;
 	bounding?: BoundingBox;
 	corners?: boolean[];
+	filled?: boolean;
 }
 
 export interface Transform {
