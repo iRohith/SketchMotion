@@ -3,9 +3,6 @@
 	import CanvasToolbar from '$lib/components/canvas/CanvasToolbar.svelte';
 	import DemoCursor from '$lib/components/DemoCursor.svelte';
 	import AutoAnalysis from '$lib/components/workspace/AutoAnalysis.svelte';
-	import LayersPanel from '$lib/components/LayersPanel.svelte';
-	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
-	import StepPanel from '$lib/components/StepPanel.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import WorkspacePanel from '$lib/components/workspace/WorkspacePanel.svelte';
 	import { demoRunnerState } from '$lib/stores/demoRunner.svelte';
@@ -18,54 +15,34 @@
 	<Titlebar />
 
 	<main
-		class="flex h-full min-h-0 w-full flex-1 flex-col gap-3 pt-3 lg:grid lg:grid-cols-[3fr_2fr] lg:grid-rows-[7fr_3fr]"
+		class="flex h-full min-h-0 w-full flex-col gap-3 pt-3 lg:flex-row"
 		class:pointer-events-none={demoRunnerState.isRunning}
 	>
-		<div class="glass-panel order-1 aspect-4/3 lg:relative lg:order-0 lg:aspect-auto lg:h-auto">
-			<div
-				class="flex h-full w-full items-center justify-center border-white/10 bg-black/20 lg:absolute lg:inset-0 lg:h-full lg:w-full"
-			>
-				<CanvasPanel />
-			</div>
-		</div>
-		<div class="glass-panel order-3 aspect-4/3 lg:relative lg:order-0 lg:aspect-auto lg:h-auto">
-			<div
-				class="flex h-full w-full items-center justify-center border-white/10 bg-black/20 lg:absolute lg:inset-0 lg:h-full lg:w-full"
-			>
-				<WorkspacePanel />
-			</div>
-		</div>
-
-		<div class="order-2 flex min-h-0 flex-col gap-3 lg:order-0 lg:grid lg:grid-rows-[2fr_3fr]">
-			<div class="glass-panel lg:relative">
+		<!-- Left layout -->
+		<div class="flex aspect-4/3 w-full flex-col gap-3 lg:aspect-auto lg:w-[60%]">
+			<!-- Canvas -->
+			<div class="glass-panel relative flex-1">
 				<div
-					class="h-fit border-white/10 bg-black/20 lg:absolute lg:inset-0 lg:flex lg:h-full lg:items-center lg:justify-center"
+					class="absolute inset-0 flex h-full w-full items-center justify-center border-white/10 bg-black/20"
 				>
+					<CanvasPanel />
+				</div>
+			</div>
+
+			<!-- Toolbar -->
+			<div class="glass-panel relative">
+				<div class="flex h-fit w-full items-center justify-center border-white/10 bg-black/20">
 					<CanvasToolbar />
 				</div>
 			</div>
-			<div class="flex flex-col gap-3 lg:grid lg:grid-cols-2">
-				<div class="glass-panel lg:relative">
-					<div
-						class="h-fit border-white/10 bg-black/20 lg:absolute lg:inset-0 lg:flex lg:h-full lg:items-center lg:justify-center"
-					>
-						<LayersPanel />
-					</div>
-				</div>
-				<div class="glass-panel lg:relative">
-					<div
-						class="h-fit border-white/10 bg-black/20 lg:absolute lg:inset-0 lg:flex lg:h-full lg:items-center lg:justify-center"
-					>
-						<StepPanel />
-					</div>
-				</div>
-			</div>
 		</div>
-		<div class="glass-panel order-4 lg:relative lg:order-0">
+
+		<!-- WorkspacePanel -->
+		<div class="glass-panel relative aspect-4/3 w-full lg:aspect-auto lg:w-[40%]">
 			<div
-				class="h-fit border-white/10 bg-black/20 lg:absolute lg:inset-0 lg:flex lg:h-full lg:items-center lg:justify-center"
+				class="absolute inset-0 flex h-full w-full items-center justify-center border-white/10 bg-black/20"
 			>
-				<SettingsPanel />
+				<WorkspacePanel />
 			</div>
 		</div>
 	</main>
