@@ -7,7 +7,7 @@ import {
 	createPartFromBase64,
 	createPartFromText
 } from '@google/genai';
-import { GOOGLE_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import {
 	type AnalysisSession,
 	type FeedbackEntry,
@@ -254,7 +254,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		// Initialize Google Gemini AI client
 		const client = new GoogleGenAI({
 			vertexai: true,
-			apiKey: GOOGLE_API_KEY
+			apiKey: env.GOOGLE_API_KEY
 		});
 
 		// Use flash model by default for quick analysis

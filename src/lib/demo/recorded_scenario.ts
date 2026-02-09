@@ -3,7 +3,6 @@ import drawingData from '../assets/drawing.json';
 import type { Stroke } from '$lib/types';
 
 // Type assertion for the imported JSON
-// Type assertion for the imported JSON
 type RecordedData = Stroke[];
 
 const recordedData = drawingData as unknown as RecordedData;
@@ -13,73 +12,102 @@ function createScenarioFromRecording(): DemoAction[] {
 	const actions: DemoAction[] = [{ action: 'show' }, { action: 'delay', params: { ms: 500 } }];
 
 	let currentColor = '';
-	let currentSize = 0;
-	const delayBetweenStrokes = 300; // Requested fixed delay
-	const TARGET_DURATION_PER_COLOR = 5000; // 5 seconds per color group
+	const delayBetweenStrokes = 200;
+	const TARGET_DURATION_PER_COLOR = 3000;
 
-	// Pass 1: Aggregate durations by color
-	const colorDurations: Record<string, number> = {};
+	// Pass 1: Aggregate durations by semantic group (using the first part of the ID)
+	const groupDurations: Record<string, number> = {};
 
 	recordedData.forEach((stroke) => {
-		const color = stroke.color;
+		const groupId = stroke.id.split('-')[1]; // stroke-hill-1 -> hill
 		const points = stroke.points;
 		const duration = points.length > 0 ? points[points.length - 1].t : 1000;
-		if (!colorDurations[color]) {
-			colorDurations[color] = 0;
-		}
-		colorDurations[color] += duration;
+		groupDurations[groupId] = (groupDurations[groupId] || 0) + duration;
 	});
 
-	// Pass 2: Calculate scale factors
-	const colorScales: Record<string, number> = {};
-	for (const [color, totalDuration] of Object.entries(colorDurations)) {
-		if (totalDuration > 0) {
-			colorScales[color] = TARGET_DURATION_PER_COLOR / totalDuration;
-			console.log(
-				`[RecordedDemo] Color ${color}: ${totalDuration.toFixed(0)}ms -> ${TARGET_DURATION_PER_COLOR}ms (Scale: ${colorScales[color].toFixed(2)}x)`
-			);
-		} else {
-			colorScales[color] = 1;
-		}
+	// Pass 2: Calculate scale factors per group
+	const groupScales: Record<string, number> = {};
+	for (const [groupId, totalDuration] of Object.entries(groupDurations)) {
+		groupScales[groupId] = totalDuration > 0 ? TARGET_DURATION_PER_COLOR / totalDuration : 1;
 	}
 
-	// Pass 3: Generate Actions
+	// Pass 3: Group strokes by semantic name
+	const semanticGroups: Record<string, Stroke[]> = {};
+	const groupOrder: string[] = [];
+
 	recordedData.forEach((stroke) => {
-		// Handle Color Change
-		if (stroke.color !== currentColor) {
-			actions.push({
-				action: 'setBrushColor',
-				params: { color: stroke.color },
-				elementId: `tool-color-${stroke.color}`,
-				duration: 400
-			});
-			actions.push({ action: 'delay', params: { ms: 100 } });
-			currentColor = stroke.color;
+		const groupId = stroke.id.split('-')[1];
+		if (!semanticGroups[groupId]) {
+			semanticGroups[groupId] = [];
+			groupOrder.push(groupId);
 		}
+		semanticGroups[groupId].push(stroke);
+	});
 
-		if (stroke.size !== currentSize) {
-			currentSize = stroke.size;
-		}
+	// Pass 4: Generate Actions group by group
+	groupOrder.forEach((groupId) => {
+		const strokes = semanticGroups[groupId];
+		const scale = groupScales[groupId];
 
-		// Calculate specific duration
-		const points = stroke.points;
-		const originalStrokeDuration = points.length > 0 ? points[points.length - 1].t : 1000;
-		const scale = colorScales[stroke.color] || 1;
-		const scaledDuration = originalStrokeDuration * scale;
-
-		actions.push({
-			action: 'drawStroke',
-			params: {
-				path: points.map((p) => ({ x: p.x, y: p.y })),
-				color: stroke.color,
-				size: stroke.size,
-				duration: scaledDuration, // Scaled by color group budget
-				moveDuration: 400
+		strokes.forEach((stroke) => {
+			// Handle Color Change
+			if (stroke.color !== currentColor) {
+				actions.push({
+					action: 'setBrushColor',
+					params: { color: stroke.color },
+					elementId: `tool-color-${stroke.color}`,
+					duration: 400
+				});
+				actions.push({ action: 'delay', params: { ms: 200 } });
+				currentColor = stroke.color;
 			}
+
+			// Draw the stroke
+			const points = stroke.points;
+			const originalDuration = points.length > 0 ? points[points.length - 1].t : 1000;
+
+			actions.push({
+				action: 'drawStroke',
+				params: {
+					id: stroke.id,
+					path: points.map((p) => ({ x: p.x, y: p.y })),
+					color: stroke.color,
+					size: stroke.size,
+					duration: originalDuration * scale,
+					moveDuration: 400
+				}
+			});
+
+			actions.push({ action: 'delay', params: { ms: delayBetweenStrokes } });
 		});
 
-		// Add fixed delay after stroke
-		actions.push({ action: 'delay', params: { ms: delayBetweenStrokes } });
+		actions.push({ action: 'delay', params: { ms: 800 } });
+
+		actions.push({ action: 'moveCursor', elementId: 'workspace-panel', duration: 400 });
+		actions.push({ action: 'triggerAnalysis' });
+		actions.push({ action: 'delay', params: { ms: 1500 } });
+
+		if (groupId === 'zebra') {
+			actions.push({ action: 'handleAskResponse', params: { response: 'yes' }, duration: 600 });
+			actions.push({ action: 'delay', params: { ms: 2000 } });
+
+			actions.push({ action: 'handleResultFeedback', params: { response: 'no' }, duration: 600 });
+			actions.push({ action: 'delay', params: { ms: 1500 } });
+
+			actions.push({ action: 'handleAskResponse', params: { response: 'yes' }, duration: 600 });
+			actions.push({ action: 'delay', params: { ms: 2000 } });
+
+			actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
+			actions.push({ action: 'delay', params: { ms: 800 } });
+		} else {
+			actions.push({ action: 'handleAskResponse', params: { response: 'yes' }, duration: 600 });
+			actions.push({ action: 'delay', params: { ms: 2000 } });
+
+			actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
+			actions.push({ action: 'delay', params: { ms: 800 } });
+		}
+
+		actions.push({ action: 'delay', params: { ms: 400 } });
 	});
 
 	// End demo

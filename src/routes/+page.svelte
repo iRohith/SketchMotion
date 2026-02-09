@@ -38,7 +38,10 @@
 		</div>
 
 		<!-- WorkspacePanel -->
-		<div class="glass-panel relative aspect-4/3 w-full lg:aspect-auto lg:w-[40%]">
+		<div
+			class="glass-panel relative aspect-4/3 w-full lg:aspect-auto lg:w-[40%]"
+			data-demo-id="workspace-panel"
+		>
 			<div
 				class="absolute inset-0 flex h-full w-full items-center justify-center border-white/10 bg-black/20"
 			>

@@ -49,8 +49,9 @@
 
 	// --- Configuration ---
 	const IDLE_THRESHOLD = 1500;
-	const SEND_DELAY = 1000;
+	const DEMO_IDLE_THRESHOLD = 500;
 	const MAX_RETRIES = 3;
+	const SEND_DELAY = $derived(demoCursor.visible ? 200 : 1000);
 
 	// --- State (from store) ---
 	// Note: analysisQueue, isSending, lastSnapshotTime, trackedClusters now come from autoAnalysis store
@@ -249,8 +250,8 @@
 	) {
 		try {
 			const { intentImage, contextImage, colorMapping } = await captureCanvasState(clusterId);
-
-			const response = await fetch('/api/analyze-group', {
+			const url = demoCursor.visible ? '/api/demo/analyze-group' : '/api/analyze-group';
+			const response = await fetch(url, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -324,18 +325,18 @@
 	}
 
 	// Trigger accumulation when last stroke update changes (after idle)
-	// In demo mode, skip the idle debounce
+	// In demo mode, disable automatic triggering - only manual triggers via triggerAnalysisNow
 	$effect(() => {
 		const lastStrokeUpdate = canvasState.lastStrokeUpdate;
 		if (lastStrokeUpdate <= 0) return;
 
-		// In demo mode, skip idle debounce - wait for manual trigger
+		// In demo mode, skip automatic analysis - wait for manual trigger
 		if (demoCursor.visible) {
-			clearDebounceTimer();
 			return;
 		}
 
 		clearDebounceTimer();
+
 		setDebounceTimer(
 			setTimeout(() => {
 				runAccumulation();
@@ -733,7 +734,8 @@
 				`[AutoAnalysis] Sending: cluster=${item.clusterId}, groups=${colorMapping.length}, intentSize=${Math.round(intentImage.length / 1024)}KB`
 			);
 
-			const response = await fetch('/api/analyze-group', {
+			const url = demoCursor.visible ? '/api/demo/analyze-group' : '/api/analyze-group';
+			const response = await fetch(url, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',

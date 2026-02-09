@@ -26,6 +26,7 @@ export type ActionHandler = (action: DemoAction) => Promise<void>;
 // --- Common Parameter Types ---
 
 export type DrawStrokeParams = {
+	id?: string;
 	path: Point[];
 	color?: string;
 	size?: number;

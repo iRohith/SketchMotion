@@ -18,6 +18,7 @@ export async function drawStroke(action: DemoAction): Promise<void> {
 
 	return new Promise((resolve) => {
 		drawDemoStroke(params.path, {
+			id: params.id,
 			color: params.color,
 			size: params.size,
 			duration: params.duration ?? action.duration ?? 1000,
@@ -39,6 +40,7 @@ export async function drawStrokes(action: DemoAction): Promise<void> {
 	const strokePaths = params.strokes.map((s) => ({
 		path: s.path,
 		options: {
+			id: s.id,
 			color: s.color,
 			size: s.size,
 			duration: s.duration ?? 1000,

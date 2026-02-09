@@ -1,5 +1,5 @@
 import type { BoundingBox, Point, Stroke, Transform } from '$lib/types';
-import { moveCursorToElement, type CursorOptions } from './demoCursor.svelte';
+import { moveCursorToElement, type CursorOptions, demoCursor } from './demoCursor.svelte';
 import { canvasToolbarState } from './canvasToolbar.svelte';
 import { computeGroups, type GroupingSettings } from '$lib/utils/grouping';
 import { pushStrokeHistory, undoStrokeHistory, redoStrokeHistory } from './history.svelte';
@@ -51,10 +51,11 @@ function scheduleGroupRecompute() {
 	if (groupRecomputeTimer) {
 		clearTimeout(groupRecomputeTimer);
 	}
+	const delay = demoCursor.visible ? 100 : 600;
 	groupRecomputeTimer = setTimeout(() => {
 		groupRecomputeTimer = null;
 		recomputeGroups();
-	}, 600);
+	}, delay);
 }
 
 export function addStroke(stroke: Stroke) {

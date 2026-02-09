@@ -6,7 +6,8 @@ import {
 	handleAskResponse as handleAskResponseFn,
 	handleResultFeedback as handleResultFeedbackFn,
 	addUserNote as addUserNoteFn,
-	triggerAnalysisNow
+	triggerAnalysisNow,
+	analysisHover
 } from '$lib/stores/analysis.svelte';
 
 // --- Analysis Actions ---
@@ -14,7 +15,15 @@ import {
 export async function triggerAnalysis(): Promise<void> {
 	// Trigger the analysis accumulation manually (for demo mode)
 	triggerAnalysisNow();
-	// Small delay to allow the hover to appear
+
+	// Wait for the hover to actually appear (up to 3 seconds)
+	const maxWait = 3000;
+	const startTime = Date.now();
+	while (!analysisHover.current?.visible && Date.now() - startTime < maxWait) {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+
+	// Add a small buffer to ensure it's fully rendered
 	await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
@@ -57,7 +66,7 @@ export async function handleAskResponse(action: DemoAction): Promise<void> {
 		return;
 	}
 
-	handleAskResponseFn(params.response);
+	await handleAskResponseFn(params.response);
 }
 
 export async function handleResultFeedback(action: DemoAction): Promise<void> {
@@ -67,7 +76,7 @@ export async function handleResultFeedback(action: DemoAction): Promise<void> {
 		return;
 	}
 
-	handleResultFeedbackFn(params.response);
+	await handleResultFeedbackFn(params.response);
 }
 
 export async function addUserNote(action: DemoAction): Promise<void> {

@@ -139,6 +139,7 @@ function getPointOnPath(path: Point[], t: number): Point {
 }
 
 export interface DemoStrokeOptions {
+	id?: string;
 	duration?: number;
 	moveDuration?: number;
 	ease?: (t: number) => number;
@@ -243,7 +244,7 @@ export async function drawDemoStroke(
 
 	// Phase 2: Draw the stroke
 	const stroke: Stroke = {
-		id: createStrokeId(),
+		id: options.id ?? createStrokeId(),
 		points: [{ x: canvasPath[0].x, y: canvasPath[0].y, t: 0 }],
 		color: options.color ?? canvasToolbarState.brushColor,
 		size: options.size ?? canvasToolbarState.brushSize,

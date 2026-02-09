@@ -45,17 +45,61 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (!event.ctrlKey) return;
 		if (isEditableTarget(event.target)) return;
 		const key = event.key.toLowerCase();
-		if (key === 'z') {
-			event.preventDefault();
-			undoStrokes();
-			return;
+
+		// Undo / Redo (Ctrl+Z, Ctrl+Y)
+		if (event.ctrlKey || event.metaKey) {
+			if (key === 'z') {
+				event.preventDefault();
+				if (event.shiftKey) {
+					redoStrokes();
+				} else {
+					undoStrokes();
+				}
+				return;
+			}
+			if (key === 'y') {
+				event.preventDefault();
+				redoStrokes();
+				return;
+			}
 		}
-		if (key === 'y') {
-			event.preventDefault();
-			redoStrokes();
+
+		// Single Key Shortcuts (only if no modifiers)
+		if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+			if (key === 'v') {
+				event.preventDefault();
+				setMode(canvasToolbarState.mode === 'select' ? 'brush' : 'select', 'hotkey-toggle-mode');
+				return;
+			}
+			if (key === 'g') {
+				event.preventDefault();
+				setGroupSelect(!canvasToolbarState.groupSelect, 'hotkey-toggle-group');
+				return;
+			}
+			if (key === 'backspace' || key === 'delete') {
+				event.preventDefault();
+				deleteSelectedStrokes('hotkey-delete');
+				return;
+			}
+			if (['1', '2', '3', '4'].includes(key)) {
+				event.preventDefault();
+				const index = parseInt(key) - 1;
+				const size = BRUSH_SIZES[index];
+				if (size !== undefined) {
+					setMode('brush');
+					setBrushSize(size, `hotkey-size-${size}`);
+				}
+				return;
+			}
+		}
+	}
+
+	function handleReset() {
+		if (confirm('Are you sure you want to reset and clear all data? This cannot be undone.')) {
+			localStorage.clear();
+			window.location.reload();
 		}
 	}
 
@@ -167,7 +211,7 @@
 	{@render ToolbarButton(
 		'tool-select',
 		isFinal || !isSelectMode,
-		groupSelect ? 'Disable Group Select' : 'Enable Group Select',
+		(groupSelect ? 'Disable Group Select' : 'Enable Group Select') + ' (G)',
 		() => setGroupSelect(!groupSelect, 'tool-select'),
 		isSelectMode && groupSelect,
 		'violet',
@@ -189,8 +233,8 @@
 	{@render ToolbarButton(
 		'tool-delete',
 		isFinal || !isSelectMode || canvasToolbarState.selectedIds.length === 0,
-		'Delete stroke (Backspace)',
-		() => deleteSelectedStrokes('tool-delete'),
+		'Delete stroke (Backspace/Delete)',
+		() => deleteSelectedStrokes('hotkey-delete'),
 		isSelectMode,
 		'rose',
 		Trash2
@@ -215,7 +259,7 @@
 						: 'border-transparent bg-white/10 hover:bg-white/20'}
 				{!isFinal && 'hover:-translate-y-0.5 active:translate-y-0 active:scale-95'}"
 				aria-label="Brush size {size}px"
-				title={`Brush size ${size}px`}
+				title={`Brush size ${size}px (${BRUSH_SIZES.indexOf(size) + 1})`}
 				data-demo-id="size-{size}"
 			>
 				<div
@@ -259,13 +303,13 @@
 			<button
 				disabled={isFinal}
 				data-demo-id="tool-reset"
-				onclick={() => deleteAllStrokes('tool-reset')}
+				onclick={handleReset}
 				class="group flex h-10 shrink-0 items-center justify-center rounded-xl border px-4 text-sm font-medium transition-all duration-200
 				{isFinal
 					? 'cursor-not-allowed border-white/5 bg-white/3 text-white/10 opacity-40 grayscale'
 					: COLORS['red'].inactive}
 				{!isFinal && 'hover:-translate-y-0.5 active:translate-y-0 active:scale-95'}"
-				title="Reset canvas (clear history)"
+				title="Reset and clear all data"
 			>
 				Reset
 			</button>

@@ -6,7 +6,7 @@ import {
 	createPartFromBase64,
 	createPartFromText
 } from '@google/genai';
-import { GOOGLE_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export const POST: RequestHandler = async ({ request, platform }) => {
 	// Rate limiting via Cloudflare binding (optional check)
@@ -39,7 +39,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		// Initialize Google Gemini AI client
 		const client = new GoogleGenAI({
 			vertexai: true,
-			apiKey: GOOGLE_API_KEY
+			apiKey: env.GOOGLE_API_KEY
 		});
 
 		const base64Data = image.split(',')[1] || image;

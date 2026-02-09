@@ -1,10 +1,4 @@
-import {
-	moveCursorToElement,
-	demoCursor,
-	queueAction,
-	waitForTarget,
-	type CursorOptions
-} from './demoCursor.svelte';
+import { moveCursorToElement, demoCursor, type CursorOptions } from './demoCursor.svelte';
 import { canvasToScreen } from '$lib/utils/demoStroke';
 import { traceImage } from '$lib/utils/tracer';
 import { addStroke, calculateBoundingBox, requestRender, strokes } from '$lib/stores/canvas.svelte';
@@ -150,21 +144,6 @@ export function showAskHover(
 			visible: true
 		};
 		startHoverTimeout();
-
-		// Demo Auto-Interaction
-		if (demoCursor.visible) {
-			queueAction(async () => {
-				const btnId = `hover-ask-yes-${clusterId}`;
-				const found = await waitForTarget(btnId, 2000);
-				if (found && demoCursor.visible) {
-					await moveCursorToElement(btnId, {
-						action: 'click',
-						duration: 800,
-						onComplete: () => handleAskResponse('yes')
-					});
-				}
-			});
-		}
 	});
 }
 
@@ -187,21 +166,7 @@ export function showResultHover(
 	};
 	startHoverTimeout();
 
-	// Demo Auto-Interaction
-	// ... (existing demo logic) ...
-	if (demoCursor.visible) {
-		queueAction(async () => {
-			const btnId = `hover-feedback-yes-${clusterId}`;
-			const found = await waitForTarget(btnId, 8000); // Wait longer for API
-			if (found && demoCursor.visible) {
-				await moveCursorToElement(btnId, {
-					action: 'click',
-					duration: 800,
-					onComplete: () => handleResultFeedback('yes')
-				});
-			}
-		});
-	}
+	startHoverTimeout();
 }
 
 export function dismissHover(result: 'yes' | 'no' | 'dismissed' = 'dismissed') {
@@ -225,7 +190,7 @@ export function handleAskResponse(response: 'yes' | 'no') {
 	const elementId = analysisHover.current
 		? `hover-ask-${response}-${analysisHover.current.clusterId}`
 		: undefined;
-	moveCursorToElement(elementId, {
+	return moveCursorToElement(elementId, {
 		onComplete: () => {
 			dismissHover(response);
 		}
@@ -242,12 +207,13 @@ export function handleResultFeedback(feedback: 'yes' | 'no') {
 	const currentHover = analysisHover.current;
 
 	if (currentHover?.analysisItemId) {
-		setAnalysisItemFeedback(currentHover.analysisItemId, feedback, undefined, elementId, {
+		return setAnalysisItemFeedback(currentHover.analysisItemId, feedback, undefined, elementId, {
 			onComplete: () => {
 				dismissHover('dismissed');
 			}
 		});
 	}
+	return Promise.resolve();
 }
 
 // NEW: Handle Recreate Action
@@ -328,7 +294,8 @@ export async function handleRecreate(sourceItemId: string) {
 
 	try {
 		// 1. Call API
-		const response = await fetch('/api/generate-image', {
+		const url = demoCursor.visible ? '/api/demo/generate-image' : '/api/generate-image';
+		const response = await fetch(url, {
 			method: 'POST',
 			body: JSON.stringify({
 				image: sourceItem.imageUrl,
