@@ -7,7 +7,9 @@ import {
 	handleResultFeedback as handleResultFeedbackFn,
 	addUserNote as addUserNoteFn,
 	triggerAnalysisNow,
-	analysisHover
+	analysisHover,
+	handleRecreate as handleRecreateFn,
+	analysisResults
 } from '$lib/stores/analysis.svelte';
 
 const MIN_POPUP_DISPLAY_TIME = 1500;
@@ -280,6 +282,29 @@ export async function performFullManualAnalysis(action: DemoAction): Promise<voi
 	}
 }
 
+export async function triggerRecreate(action: DemoAction): Promise<void> {
+	const params = action.params as { groupId: string };
+	if (!params?.groupId) {
+		console.warn('[DemoAction:triggerRecreate] Missing groupId param');
+		return;
+	}
+
+	// Find the latest analysis item for this group
+	const item = analysisResults.items
+		.filter((i) => i.clusterId === params.groupId && i.status === 'success')
+		.pop();
+
+	if (!item) {
+		console.warn(`[DemoAction:triggerRecreate] No success item found for group ${params.groupId}`);
+		return;
+	}
+
+	console.log(
+		`[DemoAction:triggerRecreate] Recreating item ${item.id} for group ${params.groupId}`
+	);
+	await handleRecreateFn(item.id);
+}
+
 export const analysisActions = {
 	triggerAnalysis: async () => triggerAnalysis(),
 	showAskHover,
@@ -289,5 +314,6 @@ export const analysisActions = {
 	handleResultFeedback,
 	addUserNote,
 	showManualAskHover,
-	performFullManualAnalysis
+	performFullManualAnalysis,
+	triggerRecreate
 };

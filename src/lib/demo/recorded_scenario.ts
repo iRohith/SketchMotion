@@ -236,78 +236,19 @@ function createScenarioFromRecording(): DemoAction[] {
 			}
 		});
 
-		// Demonstrate image replacement
+		// Demonstrate image recreation via API
 		actions.push({
-			action: 'replaceGroupWithImage',
-			params: {
-				groupId: 'giraffe',
-				// Placeholder image with white background to demonstrate alpha removal
-				imageUrl: 'https://placehold.co/400x600/orange/white.png?text=Giraffe'
-			},
-			duration: 1000
-		});
-	}
-
-	// ========================================================================
-	// ACT 5 — ZEBRA  (feedback loop — the star moment)
-	// ========================================================================
-
-	actions.push({
-		action: 'showNarrationAsync',
-		params: {
-			text: "One more animal! Let's see if Gemini can identify stripes… 🤔",
-			duration: 3000,
-			sound: 'typing'
-		}
-	});
-
-	addStrokesForGroup('zebra');
-
-	if (zebraIds.length > 0) {
-		// First pass — will return "Horse"
-		actions.push({
-			action: 'performFullManualAnalysis',
-			params: { groupId: 'zebra', strokeIds: zebraIds }
+			action: 'triggerRecreate',
+			params: { groupId: 'giraffe' }
 		});
 
-		// Reject! Cursor clicks No
-		actions.push({ action: 'delay', params: { ms: 400 } });
-		actions.push({
-			action: 'handleResultFeedback',
-			params: { response: 'no' },
-			duration: 600
-		});
+		actions.push({ action: 'delay', params: { ms: 500 } });
 
-		// Explain the feedback loop
 		actions.push({
 			action: 'showNarration',
 			params: {
-				text: "Wrong! 'NOT Horse' constraint injected. Self-correction re-analyzing… ✍️",
-				duration: 3000,
-				sound: 'typing'
-			}
-		});
-
-		// Retry — will return "Zebra"
-		actions.push({
-			action: 'performFullManualAnalysis',
-			params: { groupId: 'zebra', strokeIds: zebraIds, isRetry: true }
-		});
-
-		// Confirm! Cursor clicks Yes
-		actions.push({
-			action: 'handleResultFeedback',
-			params: { response: 'yes' },
-			duration: 600
-		});
-		actions.push({ action: 'delay', params: { ms: 200 } });
-
-		// Celebrate
-		actions.push({
-			action: 'showNarration',
-			params: {
-				text: 'The iterative feedback loop works! Each rejection teaches the model 🧠✨',
-				duration: 3000,
+				text: 'Sketch replaced with a hi-fi asset — all in real-time, right on the canvas! 🖼️✨',
+				duration: 3500,
 				sound: 'typing'
 			}
 		});
@@ -316,6 +257,15 @@ function createScenarioFromRecording(): DemoAction[] {
 	// ========================================================================
 	// OUTRO
 	// ========================================================================
+
+	actions.push({
+		action: 'showNarration',
+		params: {
+			text: "That's SketchMotion — sketch, analyze, generate, all powered by Gemini 🚀",
+			duration: 3500,
+			sound: 'typing'
+		}
+	});
 
 	actions.push({ action: 'delay', params: { ms: 500 } });
 	actions.push({ action: 'stopDemo', elementId: 'demo-button', duration: 1000 });

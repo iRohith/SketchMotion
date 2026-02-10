@@ -26,15 +26,15 @@
 		position: fixed;
 		z-index: 10001;
 		pointer-events: none;
-		max-width: 320px;
+		max-width: 400px;
 		filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.15));
 	}
 
 	.bubble-content {
 		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 		color: white;
-		padding: 12px 18px;
-		border-radius: 16px;
+		padding: 16px 24px;
+		border-radius: 20px;
 		position: relative;
 	}
 
@@ -52,7 +52,7 @@
 
 	.narration-text {
 		margin: 0;
-		font-size: 14px;
+		font-size: 18px;
 		font-weight: 500;
 		line-height: 1.5;
 		font-family:
