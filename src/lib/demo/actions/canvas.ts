@@ -4,10 +4,79 @@ import {
 	deleteSelectedStrokes,
 	deleteAllStrokes,
 	undoStrokes,
-	redoStrokes
+	redoStrokes,
+	getStrokeIdsInGroup,
+	addStroke,
+	calculateBoundingBox,
+	deleteStroke,
+	requestRender,
+	strokes,
+	commitStrokeHistory
 } from '$lib/stores/canvas.svelte';
+import { removeWhiteBackground } from '$lib/utils/image';
+import type { Stroke } from '$lib/types';
 
 // --- Canvas Actions ---
+
+export async function replaceGroupWithImage(action: DemoAction): Promise<void> {
+	const params = action.params as { groupId: string; imageUrl: string };
+	if (!params?.groupId || !params?.imageUrl) {
+		console.warn('[DemoAction:replaceGroupWithImage] Missing groupId or imageUrl');
+		return;
+	}
+
+	// 1. Get strokes in group
+	const strokeIds = getStrokeIdsInGroup(params.groupId);
+	if (strokeIds.length === 0) {
+		console.warn(`[DemoAction:replaceGroupWithImage] No strokes found for group ${params.groupId}`);
+		return;
+	}
+
+	const groupStrokes: Stroke[] = [];
+	strokeIds.forEach((id) => {
+		const s = strokes.get(id);
+		if (s) groupStrokes.push(s);
+	});
+
+	if (groupStrokes.length === 0) return;
+
+	// 2. Calculate bounding box of the group
+	const bbox = calculateBoundingBox(groupStrokes);
+	if (!bbox) return;
+
+	// 3. Process image (remove white background)
+	try {
+		const processedUrl = await removeWhiteBackground(params.imageUrl);
+
+		// 4. Create new stroke that acts as the image container
+		const newStroke: Stroke = {
+			id: `image-${params.groupId}-${Date.now()}`,
+			points: [
+				{ x: bbox.minX, y: bbox.minY, t: 0 },
+				{ x: bbox.maxX, y: bbox.minY, t: 0 },
+				{ x: bbox.maxX, y: bbox.maxY, t: 0 },
+				{ x: bbox.minX, y: bbox.maxY, t: 0 },
+				// Close the loop for cleaner bounding box calc if re-calc happen
+				{ x: bbox.minX, y: bbox.minY, t: 0 }
+			],
+			color: '#000000', // Irrelevant for image
+			size: 0,
+			layer: groupStrokes[0].layer,
+			image: processedUrl,
+			bounding: bbox
+		};
+
+		// 5. Delete old strokes
+		strokeIds.forEach((id) => deleteStroke(id));
+
+		// 6. Add new image stroke
+		addStroke(newStroke);
+		commitStrokeHistory();
+		requestRender();
+	} catch (error) {
+		console.error('[DemoAction:replaceGroupWithImage] Failed to process image:', error);
+	}
+}
 
 export async function drawStroke(action: DemoAction): Promise<void> {
 	const params = action.params as DrawStrokeParams | undefined;
@@ -82,6 +151,7 @@ export async function redo(): Promise<void> {
 export const canvasActions = {
 	drawStroke,
 	drawStrokes,
+	replaceGroupWithImage,
 	deleteSelected,
 	deleteAll,
 	undo: async () => undo(),

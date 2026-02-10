@@ -44,6 +44,7 @@ export interface Stroke {
 	bounding?: BoundingBox;
 	corners?: boolean[];
 	filled?: boolean;
+	image?: string; // Data URL or Image URL
 }
 
 export interface Transform {

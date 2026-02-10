@@ -8,7 +8,7 @@
 	{#key narration.current.id}
 		<div
 			class="narration-bubble"
-			style="left: {demoCursor.x + 20}px; top: {demoCursor.y + 20}px;"
+			style="left: {narration.pinnedX + 20}px; top: {narration.pinnedY + 20}px;"
 			transition:fade={{ duration: 300 }}
 		>
 			<div class="bubble-content">

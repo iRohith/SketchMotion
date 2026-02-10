@@ -9,25 +9,15 @@ const recordedData = drawingData as unknown as RecordedData;
 
 // Convert recorded actions to demo actions
 function createScenarioFromRecording(): DemoAction[] {
-	const actions: DemoAction[] = [
-		{ action: 'show' },
-		{ action: 'delay', params: { ms: 500 } },
-		{
-			action: 'showNarration',
-			params: {
-				text: 'Welcome to SketchMotion! Watch as AI understands your drawings in real-time ✨',
-				duration: 4000,
-				sound: 'typing'
-			}
-		}
-	];
+	const actions: DemoAction[] = [];
 
 	let currentColor = '';
-	const delayBetweenStrokes = 200;
+	const delayBetweenStrokes = 100;
 	const TARGET_DURATION_PER_COLOR = 3000;
 
-	const groupDurations: Record<string, number> = {};
+	// --- Pre-compute group data ---
 
+	const groupDurations: Record<string, number> = {};
 	recordedData.forEach((stroke) => {
 		const groupId = stroke.id.split('-')[1];
 		const points = stroke.points;
@@ -42,7 +32,6 @@ function createScenarioFromRecording(): DemoAction[] {
 
 	const semanticGroups: Record<string, Stroke[]> = {};
 	const groupOrder: string[] = [];
-
 	recordedData.forEach((stroke) => {
 		const groupId = stroke.id.split('-')[1];
 		if (!semanticGroups[groupId]) {
@@ -51,6 +40,15 @@ function createScenarioFromRecording(): DemoAction[] {
 		}
 		semanticGroups[groupId].push(stroke);
 	});
+
+	const getIds = (id: string) => semanticGroups[id]?.map((s) => s.id) || [];
+	const hillIds = getIds('hill');
+	const sunIds = getIds('sun');
+	const riverIds = getIds('river');
+	const giraffeIds = getIds('giraffe');
+	const zebraIds = getIds('zebra');
+
+	// --- Helper: Add drawing strokes for a group ---
 
 	const addStrokesForGroup = (groupId: string) => {
 		const strokes = semanticGroups[groupId];
@@ -66,7 +64,7 @@ function createScenarioFromRecording(): DemoAction[] {
 					elementId: `tool-color-${stroke.color}`,
 					duration: 400
 				});
-				actions.push({ action: 'delay', params: { ms: 200 } });
+				actions.push({ action: 'delay', params: { ms: 150 } });
 				currentColor = stroke.color;
 			}
 
@@ -87,20 +85,37 @@ function createScenarioFromRecording(): DemoAction[] {
 
 			actions.push({ action: 'delay', params: { ms: delayBetweenStrokes } });
 		});
-
-		actions.push({ action: 'delay', params: { ms: 800 } });
 	};
 
-	// Helper to add IDs
-	const getIds = (id: string) => semanticGroups[id]?.map((s) => s.id) || [];
+	// ========================================================================
+	// ACT 0 — INTRO
+	// ========================================================================
 
-	const hillIds = getIds('hill');
-	const sunIds = getIds('sun');
-	const riverIds = getIds('river');
-	const giraffeIds = getIds('giraffe');
-	const zebraIds = getIds('zebra');
+	actions.push({ action: 'show' });
+	actions.push({ action: 'delay', params: { ms: 400 } });
 
-	// --- 1. Hill ---
+	actions.push({
+		action: 'showNarration',
+		params: {
+			text: 'Welcome to SketchMotion — where AI understands your sketches in real-time ✨',
+			duration: 3500,
+			sound: 'typing'
+		}
+	});
+
+	// ========================================================================
+	// ACT 1 — HILLS  (draw + background narration)
+	// ========================================================================
+
+	actions.push({
+		action: 'showNarrationAsync',
+		params: {
+			text: "Let's paint a landscape! Strokes are captured at 60fps with Catmull-Rom smoothing 🎯",
+			duration: 3000,
+			sound: 'typing'
+		}
+	});
+
 	addStrokesForGroup('hill');
 
 	if (hillIds.length > 0) {
@@ -108,37 +123,64 @@ function createScenarioFromRecording(): DemoAction[] {
 			action: 'showManualAskHover',
 			params: { groupId: 'hill', strokeIds: hillIds }
 		});
-		actions.push({ action: 'delay', params: { ms: 50 } });
+		// Quick flash — hill is recognized but we move on
+		actions.push({ action: 'delay', params: { ms: 300 } });
 	}
 
-	// --- 2. Sun ---
+	// ========================================================================
+	// ACT 2 — SUN  (draw + first full analysis showcase)
+	// ========================================================================
+
+	actions.push({
+		action: 'showNarrationAsync',
+		params: {
+			text: 'Adding a sun! The Smart Grouping Engine clusters strokes by color, time, and proximity 📐',
+			duration: 3500,
+			sound: 'typing'
+		}
+	});
+
 	addStrokesForGroup('sun');
 
 	if (sunIds.length > 0) {
+		// Full analysis cycle — event-driven (awaits API internally)
 		actions.push({
 			action: 'performFullManualAnalysis',
 			params: { groupId: 'sun', strokeIds: sunIds }
 		});
 
-		// Wait for Result Hover to appear and be ready
-		actions.push({ action: 'delay', params: { ms: 1500 } });
-
-		const sunAnalysisDuration = 3000;
+		// Narration while result is visible
 		actions.push({
 			action: 'showNarration',
 			params: {
-				text: 'Analyzing the scene context... 🧠',
-				duration: sunAnalysisDuration,
+				text: 'Dual-view analysis: intent image (bright) + context image (dim) sent to Gemini ⚡',
+				duration: 3000,
 				sound: 'typing'
 			}
 		});
 
-		actions.push({ action: 'playSound', params: { sound: 'click' } });
-		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
-		actions.push({ action: 'delay', params: { ms: 400 } });
+		// Confirm — cursor moves to Yes and clicks
+		actions.push({
+			action: 'handleResultFeedback',
+			params: { response: 'yes' },
+			duration: 600
+		});
+		actions.push({ action: 'delay', params: { ms: 300 } });
 	}
 
-	// --- 3. River ---
+	// ========================================================================
+	// ACT 3 — RIVER  (draw + quick confirm)
+	// ========================================================================
+
+	actions.push({
+		action: 'showNarrationAsync',
+		params: {
+			text: 'A river flowing through! Each verified object is locked into the context graph 🔒',
+			duration: 3000,
+			sound: 'typing'
+		}
+	});
+
 	addStrokesForGroup('river');
 
 	if (riverIds.length > 0) {
@@ -147,15 +189,29 @@ function createScenarioFromRecording(): DemoAction[] {
 			params: { groupId: 'river', strokeIds: riverIds }
 		});
 
-		// Wait for Result Hover to appear and be ready
-		actions.push({ action: 'delay', params: { ms: 1500 } });
-
-		actions.push({ action: 'playSound', params: { sound: 'click' } });
-		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
-		actions.push({ action: 'delay', params: { ms: 400 } });
+		// Quick confirm
+		actions.push({ action: 'delay', params: { ms: 300 } });
+		actions.push({
+			action: 'handleResultFeedback',
+			params: { response: 'yes' },
+			duration: 600
+		});
+		actions.push({ action: 'delay', params: { ms: 300 } });
 	}
 
-	// --- 4. Giraffe ---
+	// ========================================================================
+	// ACT 4 — GIRAFFE  (draw + confirm + recreate tease)
+	// ========================================================================
+
+	actions.push({
+		action: 'showNarrationAsync',
+		params: {
+			text: 'Now a giraffe — spatial containment groups spots + body + neck together 🦒',
+			duration: 3500,
+			sound: 'typing'
+		}
+	});
+
 	addStrokesForGroup('giraffe');
 
 	if (giraffeIds.length > 0) {
@@ -164,66 +220,104 @@ function createScenarioFromRecording(): DemoAction[] {
 			params: { groupId: 'giraffe', strokeIds: giraffeIds }
 		});
 
-		// Wait for Result Hover to appear and be ready
-		actions.push({ action: 'delay', params: { ms: 1500 } });
+		actions.push({
+			action: 'handleResultFeedback',
+			params: { response: 'yes' },
+			duration: 600
+		});
+		actions.push({ action: 'delay', params: { ms: 300 } });
 
-		actions.push({ action: 'playSound', params: { sound: 'click' } });
-		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
-		actions.push({ action: 'delay', params: { ms: 1000 } });
-
-		const giraffeRecreateDuration = 2500;
 		actions.push({
 			action: 'showNarration',
 			params: {
-				text: 'Generating high-fidelity asset... 🎨',
-				duration: giraffeRecreateDuration,
+				text: 'Passing to Gemini Image Generation for hi-fi asset creation… 🎨',
+				duration: 2500,
 				sound: 'typing'
 			}
 		});
+
+		// Demonstrate image replacement
+		actions.push({
+			action: 'replaceGroupWithImage',
+			params: {
+				groupId: 'giraffe',
+				// Placeholder image with white background to demonstrate alpha removal
+				imageUrl: 'https://placehold.co/400x600/orange/white.png?text=Giraffe'
+			},
+			duration: 1000
+		});
 	}
 
-	// --- 5. Zebra ---
+	// ========================================================================
+	// ACT 5 — ZEBRA  (feedback loop — the star moment)
+	// ========================================================================
+
+	actions.push({
+		action: 'showNarrationAsync',
+		params: {
+			text: "One more animal! Let's see if Gemini can identify stripes… 🤔",
+			duration: 3000,
+			sound: 'typing'
+		}
+	});
+
 	addStrokesForGroup('zebra');
 
 	if (zebraIds.length > 0) {
-		// First pass (Horse)
+		// First pass — will return "Horse"
 		actions.push({
 			action: 'performFullManualAnalysis',
 			params: { groupId: 'zebra', strokeIds: zebraIds }
 		});
 
-		// Wait for Result Hover to appear and be ready
-		actions.push({ action: 'delay', params: { ms: 1500 } });
+		// Reject! Cursor clicks No
+		actions.push({ action: 'delay', params: { ms: 400 } });
+		actions.push({
+			action: 'handleResultFeedback',
+			params: { response: 'no' },
+			duration: 600
+		});
 
-		actions.push({ action: 'playSound', params: { sound: 'click' } });
-		actions.push({ action: 'handleResultFeedback', params: { response: 'no' }, duration: 600 });
-		actions.push({ action: 'delay', params: { ms: 1000 } });
-
-		const zebraFeedbackDuration = 2500;
+		// Explain the feedback loop
 		actions.push({
 			action: 'showNarration',
 			params: {
-				text: 'Refining context with feedback... ✍️',
-				duration: zebraFeedbackDuration,
+				text: "Wrong! 'NOT Horse' constraint injected. Self-correction re-analyzing… ✍️",
+				duration: 3000,
 				sound: 'typing'
 			}
 		});
 
-		// Retry (Zebra -> Yes)
+		// Retry — will return "Zebra"
 		actions.push({
 			action: 'performFullManualAnalysis',
 			params: { groupId: 'zebra', strokeIds: zebraIds, isRetry: true }
 		});
 
-		// Wait for Result Hover to appear and be ready
-		actions.push({ action: 'delay', params: { ms: 1500 } });
+		// Confirm! Cursor clicks Yes
+		actions.push({
+			action: 'handleResultFeedback',
+			params: { response: 'yes' },
+			duration: 600
+		});
+		actions.push({ action: 'delay', params: { ms: 200 } });
 
-		actions.push({ action: 'playSound', params: { sound: 'click' } });
-		actions.push({ action: 'handleResultFeedback', params: { response: 'yes' }, duration: 600 });
-		actions.push({ action: 'delay', params: { ms: 400 } });
+		// Celebrate
+		actions.push({
+			action: 'showNarration',
+			params: {
+				text: 'The iterative feedback loop works! Each rejection teaches the model 🧠✨',
+				duration: 3000,
+				sound: 'typing'
+			}
+		});
 	}
 
-	actions.push({ action: 'delay', params: { ms: 1000 } });
+	// ========================================================================
+	// OUTRO
+	// ========================================================================
+
+	actions.push({ action: 'delay', params: { ms: 500 } });
 	actions.push({ action: 'stopDemo', elementId: 'demo-button', duration: 1000 });
 
 	return actions;

@@ -12,6 +12,9 @@ class NarrationStore {
 	visible = $state(false);
 	typedText = $state('');
 	isTyping = $state(false);
+	/** Pinned position — captured when narration first appears so bubble stays put */
+	pinnedX = $state(0);
+	pinnedY = $state(0);
 
 	private typingInterval: ReturnType<typeof setInterval> | null = null;
 	private soundTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
@@ -124,7 +127,12 @@ class NarrationStore {
 		this.soundTimeouts.add(timeout);
 	}
 
-	show(text: string, duration: number = 3000, sound?: 'click' | 'brush' | 'typing') {
+	show(
+		text: string,
+		duration: number = 3000,
+		sound?: 'click' | 'brush' | 'typing',
+		pinPosition?: { x: number; y: number }
+	) {
 		const message: NarrationMessage = {
 			id: crypto.randomUUID(),
 			text,
@@ -132,6 +140,12 @@ class NarrationStore {
 			duration,
 			sound
 		};
+
+		// Pin the bubble position if provided (for async narrations during drawing)
+		if (pinPosition) {
+			this.pinnedX = pinPosition.x;
+			this.pinnedY = pinPosition.y;
+		}
 
 		this.queue = [...this.queue, message];
 

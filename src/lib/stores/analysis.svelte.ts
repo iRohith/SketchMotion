@@ -1,10 +1,18 @@
 import { moveCursorToElement, demoCursor, type CursorOptions } from './demoCursor.svelte';
 import { canvasToScreen } from '$lib/utils/demoStroke';
 import { traceImage } from '$lib/utils/tracer';
-import { addStroke, calculateBoundingBox, requestRender, strokes } from '$lib/stores/canvas.svelte';
+import { removeWhiteBackground } from '$lib/utils/image';
+import {
+	addStroke,
+	calculateBoundingBox,
+	requestRender,
+	strokes,
+	deleteStroke,
+	commitStrokeHistory
+} from '$lib/stores/canvas.svelte';
 import type { BoundingBox, Stroke } from '$lib/types';
 import { trackedClusters } from '$lib/stores/autoAnalysis.svelte';
-import { COLORS } from '$lib/utils/constants';
+import { COLORS, CANVAS_WIDTH, CANVAS_HEIGHT } from '$lib/utils/constants';
 import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 
 // --- Hover Types & State ---
@@ -293,12 +301,58 @@ export async function handleRecreate(sourceItemId: string) {
 	console.log('[Analysis] Generated Prompt Context:', contextString);
 
 	try {
+		// Generate clean input image from strokes to avoid selection UI/artifacts
+		const cleanImage = await (async () => {
+			if (usedStrokes.length === 0 && sourceItem.imageUrl) return sourceItem.imageUrl; // Fallback
+
+			const canvas = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+			const ctx = canvas.getContext('2d')!;
+			ctx.lineCap = 'round';
+			ctx.lineJoin = 'round';
+
+			// Draw strokes
+			for (const s of usedStrokes) {
+				ctx.globalAlpha = 1.0;
+				ctx.strokeStyle = s.color;
+				ctx.lineWidth = s.size;
+				const pts = s.points;
+				if (pts.length < 2) {
+					if (pts.length === 1) {
+						ctx.fillStyle = s.color;
+						ctx.beginPath();
+						ctx.arc(pts[0].x, pts[0].y, s.size / 2, 0, Math.PI * 2);
+						ctx.fill();
+					}
+					continue;
+				}
+				ctx.beginPath();
+				ctx.moveTo(pts[0].x, pts[0].y);
+				for (let i = 1; i < pts.length - 1; i++) {
+					const curr = pts[i];
+					const next = pts[i + 1];
+					const midX = (curr.x + next.x) / 2;
+					const midY = (curr.y + next.y) / 2;
+					ctx.quadraticCurveTo(curr.x, curr.y, midX, midY);
+				}
+				ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+				ctx.stroke();
+			}
+
+			const blob = await canvas.convertToBlob({ type: 'image/png' });
+			return new Promise<string>((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onloadend = () => resolve(reader.result as string);
+				reader.onerror = reject;
+				reader.readAsDataURL(blob);
+			});
+		})();
+
 		// 1. Call API
 		const url = demoCursor.visible ? '/api/demo/generate-image' : '/api/generate-image';
 		const response = await fetch(url, {
 			method: 'POST',
 			body: JSON.stringify({
-				image: sourceItem.imageUrl,
+				image: cleanImage,
 				context: contextString
 			}),
 			headers: { 'Content-Type': 'application/json' }
@@ -308,73 +362,53 @@ export async function handleRecreate(sourceItemId: string) {
 		const data = await response.json();
 
 		if (!data.success || !data.image) {
-			throw new Error(data.error || 'No image returned');
+			throw new Error(data.error || 'No image generated');
 		}
 
-		console.log('[Analysis] Image generated, tracing...');
+		console.log('[Analysis] Image generated. Processing for canvas...');
 
-		// 2. Trace Image
-		const strokes = await traceImage(data.image, usedStrokes, {
-			threshold: 128,
-			smoothing: 0.5
-		});
+		// 2. Process Image (remove background) & Create Image Stroke
+		// instead of tracing
+		const processedUrl = await removeWhiteBackground(data.image);
 
-		console.log(`[Analysis] Traced ${strokes.length} strokes.`);
+		let newStrokeId: string | null = null;
 
-		// 3. Add to canvas
+		// Calculate target bounds
+		// If sourceItem.bounds exists, we use it.
+		// If not, we might be in trouble, but let's assume bounds exist for analysis items.
 		if (sourceItem.bounds) {
-			const tracedBounds = calculateBoundingBox(strokes);
-			if (tracedBounds) {
-				const originalW = sourceItem.bounds.width;
-				const originalH = sourceItem.bounds.height;
-				const tracedW = tracedBounds.width;
-				const tracedH = tracedBounds.height;
+			const b = sourceItem.bounds;
+			// Create image stroke
+			// We use points to define the rectangle for the image
+			const imageStroke: Stroke = {
+				id: `gen-image-${Date.now()}`,
+				points: [
+					{ x: b.minX, y: b.minY, t: 0 },
+					{ x: b.maxX, y: b.minY, t: 0 },
+					{ x: b.maxX, y: b.maxY, t: 0 },
+					{ x: b.minX, y: b.maxY, t: 0 },
+					{ x: b.minX, y: b.minY, t: 0 }
+				],
+				color: '#000000',
+				size: 0,
+				layer: usedStrokes.length > 0 ? usedStrokes[0].layer : 1, // Default to layer 1? Or active?
+				image: processedUrl,
+				bounding: b // Explicit bounds
+			};
 
-				const scaleX = originalW / tracedW;
-				const scaleY = originalH / tracedH;
-				const scale = Math.min(scaleX, scaleY) * 0.9;
-
-				const offsetX = sourceItem.bounds.centerX - tracedBounds.centerX * scale;
-				const offsetY = sourceItem.bounds.centerY - tracedBounds.centerY * scale;
-
-				strokes.forEach((s) => {
-					s.points.forEach((p) => {
-						p.x = p.x * scale + offsetX;
-						p.y = p.y * scale + offsetY;
-					});
-					s.bounding = calculateBoundingBox([s]) ?? undefined;
-					addStroke(s);
-				});
-				requestRender();
+			// 3. Replace old strokes
+			if (usedStrokes.length > 0) {
+				usedStrokes.forEach((s) => deleteStroke(s.id));
 			}
-		} else {
-			strokes.forEach((s) => addStroke(s));
+
+			// 4. Add new stroke
+			addStroke(imageStroke);
+			newStrokeId = imageStroke.id;
+			commitStrokeHistory();
 			requestRender();
+		} else {
+			console.warn('[Analysis] No bounds for source item, cannot place image safely.');
 		}
-
-		// Generate SVG for display
-		const svgStrokes = strokes.reduce((acc, s) => {
-			const points = s.points.map((p) => `${p.x},${p.y}`).join(' ');
-			return (
-				acc +
-				`<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round" />`
-			);
-		}, '');
-
-		// If we scaled/positioned strokes, we need accurate bounds for the SVG viewBox
-		// For simplicity, we can use the canvas size or the bounding box of the strokes
-		// Using canvas size ensures alignment if we just dump it
-		// But ideally we want a tight crop.
-		// Let's use the layout bounds logic
-		let svgViewBox = '0 0 100 100'; // Default
-		if (strokes.length > 0) {
-			const b = calculateBoundingBox(strokes);
-			if (b) {
-				svgViewBox = `${b.minX - 10} ${b.minY - 10} ${b.width + 20} ${b.height + 20}`;
-			}
-		}
-
-		const generatedSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${svgViewBox}">${svgStrokes}</svg>`;
 
 		// Update new item with success
 		setItemSuccess(
@@ -386,8 +420,17 @@ export async function handleRecreate(sourceItemId: string) {
 			sourceItem.bounds, // Use original bounds as reference
 			undefined,
 			data.image, // Generated image
-			generatedSvg // Trace SVG
+			undefined // No SVG trace for now
 		);
+
+		// Update tracked cluster if applicable
+		if (sourceItem.clusterId && newStrokeId) {
+			const cluster = trackedClusters.get(sourceItem.clusterId);
+			if (cluster) {
+				cluster.strokeIds = new Set([newStrokeId]);
+				cluster.lastUpdate = Date.now();
+			}
+		}
 	} catch (e) {
 		console.error('[Analysis] Recreation failed:', e);
 		setItemError(
@@ -523,6 +566,7 @@ export async function handleRetrace(itemId: string) {
 				cluster.lastUpdate = Date.now();
 
 				// 4. Force Render
+				commitStrokeHistory();
 				requestRender();
 
 				console.log(

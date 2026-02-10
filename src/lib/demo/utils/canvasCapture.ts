@@ -1,5 +1,4 @@
 import { strokes as strokesStore } from '$lib/stores/canvas.svelte';
-import { canvasToolbarState } from '$lib/stores/canvasToolbar.svelte';
 import type { Stroke } from '$lib/types';
 
 export async function captureCanvasWithHighlights(targetStrokeIds: Set<string>) {
@@ -18,9 +17,8 @@ export async function captureCanvasWithHighlights(targetStrokeIds: Set<string>) 
 	const ctx = offscreen.getContext('2d');
 	if (!ctx) throw new Error('Could not get context');
 
-	// Fill background
-	ctx.fillStyle = canvasToolbarState.backgroundColor;
-	ctx.fillRect(0, 0, width, height);
+	// Clear background (transparent)
+	ctx.clearRect(0, 0, width, height);
 
 	// Render Context Image (Everything dimmed except target)
 	// Actually, context image usually shows EVERYTHING, but non-targets are dimmed.
@@ -43,8 +41,7 @@ export async function captureCanvasWithHighlights(targetStrokeIds: Set<string>) 
 	const contextImage = offscreen.toDataURL('image/png');
 
 	// 2. Generate Intent Image (Only Targets)
-	ctx.fillStyle = canvasToolbarState.backgroundColor; // Clear/Fill again
-	ctx.fillRect(0, 0, width, height);
+	ctx.clearRect(0, 0, width, height); // Clear again for Intent Image
 
 	strokesStore.forEach((stroke) => {
 		if (targetStrokeIds.has(stroke.id)) {

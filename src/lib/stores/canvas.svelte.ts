@@ -196,6 +196,9 @@ export function isPointOnStroke(point: Point, stroke: Stroke) {
 		}
 	}
 
+	// For image strokes, the bounding box check is sufficient (treat as rectangle)
+	if (stroke.image) return true;
+
 	const points = stroke.points;
 	if (points.length === 0) return false;
 

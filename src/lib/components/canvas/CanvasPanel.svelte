@@ -60,6 +60,8 @@
 		fastSpeed: 0.1
 	});
 
+	const imageCache = new Map<string, HTMLImageElement>();
+
 	const HANDLE_SIZE = 8;
 	const HANDLE_HIT = 10;
 	const ROTATE_OFFSET = 20;
@@ -298,6 +300,52 @@
 				}
 			}
 			const last = pts[pts.length - 1];
+
+			// --- Image Rendering ---
+			if (stroke.image) {
+				let img = imageCache.get(stroke.image);
+				if (!img) {
+					img = new Image();
+					img.crossOrigin = 'Anonymous'; // Important for generated images
+					img.src = stroke.image;
+					imageCache.set(stroke.image, img);
+					img.onload = () => scheduleRender();
+				}
+
+				if (img.complete && img.naturalWidth !== 0) {
+					// Draw image using the bounding box defined by points
+					// We assume points[0] is Top-Left and points extend to Bot-Right
+					// Or simpler: calculate bounds from points
+					let minX = Infinity,
+						minY = Infinity,
+						maxX = -Infinity,
+						maxY = -Infinity;
+					for (const p of pts) {
+						minX = Math.min(minX, p.x);
+						minY = Math.min(minY, p.y);
+						maxX = Math.max(maxX, p.x);
+						maxY = Math.max(maxY, p.y);
+					}
+					const w = maxX - minX;
+					const h = maxY - minY;
+
+					// Draw image
+					mainCtx.drawImage(img, minX, minY, w, h);
+
+					// Draw highlight/selection box if needed
+					if (isHovered) {
+						mainCtx.strokeStyle = 'rgba(168, 85, 247, 0.9)';
+						mainCtx.lineWidth = baseLineWidth + 2; // Thinner selection for images
+						mainCtx.setLineDash([]);
+						mainCtx.strokeRect(minX, minY, w, h);
+					}
+				}
+
+				if (hasTransform) mainCtx.restore();
+				continue; // Skip normal stroke drawing
+			}
+
+			// --- Normal Stroke Rendering ---
 			mainCtx.lineTo(last.x, last.y);
 			if (stroke.filled) {
 				mainCtx.closePath();
